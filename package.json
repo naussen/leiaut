@@ -1,0 +1,22 @@
+{
+  "name": "leiaut-vertex-ai",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Conversor LEIAUT de Markdown para JSON estruturado usando exclusivamente Vertex AI.",
+  "main": "src/app-leiaut.js",
+  "scripts": {
+    "start": "node src/app-leiaut.js",
+    "leiaut": "node src/app-leiaut.js",
+    "test": "node test-vertex-ai-config.js && node test-leiaut.js && node test-leiaut-quality.js",
+    "test:vertex": "node test-vertex-ai-config.js",
+    "check": "node --check src/app-leiaut.js && node --check src/config/vertex-ai.js"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "dependencies": {
+    "@google/genai": "^2.10.0",
+    "dotenv": "^16.0.0"
+  },
+  "license": "MIT"
+}

@@ -1,0 +1,15 @@
+node_modules/
+.env
+.env.*
+!.env.example
+credentials/
+service-account*.json
+*.key
+*.pem
+*.log
+logs/
+*_processado.json
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
