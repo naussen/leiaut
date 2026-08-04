@@ -60,11 +60,13 @@ Confirme no Console do Google Cloud que o projeto está associado à conta de fa
 npm.cmd run leiaut -- caminho\arquivo.md
 ```
 
-O arquivo de saída será criado no diretório atual como `arquivo_processado.json`.
+O arquivo de saída será criado em `C:\site_conteudo\3leiaut_processado\<nome-da-pasta-originária>\arquivo_processado.json`. Por exemplo, a entrada `C:\materiais\Contabilidade\001.md` gera `C:\site_conteudo\3leiaut_processado\Contabilidade\001_processado.json`.
 
-O LEIAUT mantém o processamento sequencial em blocos de até aproximadamente 5.000 tokens. A divisão ocorre somente entre seções principais `##`: cabeçalhos `###` e inferiores permanecem dentro da seção pai. Se uma única seção `##` exceder o teto, o processo é interrompido com erro claro em vez de cortar a hierarquia no meio.
+O LEIAUT mantém o processamento sequencial em blocos de até aproximadamente 5.000 tokens. A divisão preferencial ocorre entre seções principais `##`, mantendo cabeçalhos `###` e inferiores dentro da seção pai. Quando uma única seção `##` excede o teto, ela pode ser repartida apenas em limites seguros de subtítulos ou parágrafos, com o título `##` repetido nos fragmentos para preservar o contexto. Os fragmentos da mesma seção são consolidados antes da validação final, que continua exigindo exatamente uma seção JSON por `##`. Se não houver limite seguro, o processo é interrompido com erro claro em vez de cortar uma palavra ou estrutura no meio.
 
 Antes de qualquer chamada ao Vertex AI, o Markdown é recusado quando contém linha patológica, sequência excessiva de espaços ou título principal duplicado. Na saída, o LEIAUT exige exatamente uma seção JSON por cabeçalho `##`, na mesma ordem. Títulos em caixa alta são normalizados para capitalização editorial, preservando siglas como `CIDE`, `ICMS`, `ISS`, `NBC TA` e `TI`; o erro conhecido `DOUTINA` é corrigido para `doutrina`.
+
+Os flashcards estruturados são gerados pelo LEIAUT em grupos de 3 a 5 por seção quando houver bases distintas suficientes. Cada cartão deve derivar de questão de concurso identificável no material ou de redação legal expressa presente na própria seção. Se nenhuma dessas bases existir, o campo permanece como `flashcards: []`; o modelo não deve inventar cartões para preencher uma quantidade mínima.
 
 ## Saída antes do diagnóstico
 

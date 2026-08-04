@@ -26,6 +26,9 @@ function getVertexAIClient() {
 const DEFAULT_LEIAUT_MAX_INPUT_TOKENS = 30000;
 const DEFAULT_LEIAUT_BLOCK_INPUT_TOKENS = 5000;
 const DEFAULT_LEIAUT_TIMEOUT_MS = 180000;
+const LEIAUT_OUTPUT_ROOT = process.env.LEIAUT_OUTPUT_ROOT
+  ? path.resolve(process.env.LEIAUT_OUTPUT_ROOT)
+  : 'C:\\site_conteudo\\3leiaut_processado';
 const MAX_MARKDOWN_LINE_LENGTH = 20000;
 const MAX_HORIZONTAL_WHITESPACE_RUN = 1000;
 const CANONICAL_ACRONYMS = new Map([
@@ -486,19 +489,34 @@ function writeJsonOutput(outputPath, data) {
     fs.writeFileSync(outputPath, JSON.stringify(data, null, 2), 'utf-8');
 }
 
+function getLeiautOutputDirectory(inputPath) {
+    const resolvedInputPath = path.resolve(inputPath);
+    const sourceDirectoryName = path.basename(path.dirname(resolvedInputPath));
+
+    if (!sourceDirectoryName) {
+        throw new Error(`Não foi possível identificar a pasta originária de: ${inputPath}`);
+    }
+
+    return path.join(LEIAUT_OUTPUT_ROOT, sourceDirectoryName);
+}
+
+function ensureOutputDirectory(outputDirectory, dryRun = false) {
+    if (!dryRun) fs.mkdirSync(outputDirectory, { recursive: true });
+}
+
 function saveDeterministicOutputs(outputs, inputPath, dryRun = false) {
     const parsed = path.parse(inputPath);
+    const sourceOutputDirectory = getLeiautOutputDirectory(inputPath);
 
     if (outputs.length === 1) {
-        const outputPath = path.join(process.cwd(), `${parsed.name}_processado.json`);
+        ensureOutputDirectory(sourceOutputDirectory, dryRun);
+        const outputPath = path.join(sourceOutputDirectory, `${parsed.name}_processado.json`);
         if (!dryRun) writeJsonOutput(outputPath, outputs[0].data);
         return [outputPath];
     }
 
-    const outputDir = path.join(process.cwd(), `${parsed.name}_processado`);
-    if (!dryRun && !fs.existsSync(outputDir)) {
-        fs.mkdirSync(outputDir, { recursive: true });
-    }
+    const outputDir = path.join(sourceOutputDirectory, `${parsed.name}_processado`);
+    ensureOutputDirectory(outputDir, dryRun);
 
     return outputs.map(output => {
         const outputPath = path.join(outputDir, `${output.fileSuffix}.json`);
@@ -591,6 +609,9 @@ function parseModelJsonResponse(response, label) {
 function buildLeiautBlockPrompt(block, context) {
     const outline = context.outline || '(sem cabeçalhos de nível 1 a 3)';
     const expectedSectionTitles = getLevelTwoHeadingTitles(block);
+    const continuationInstruction = context.continuationTitle
+        ? `Este bloco é continuação da seção ## "${context.continuationTitle}" iniciada em um bloco anterior. Retorne essa mesma seção uma única vez, sem criar uma nova seção para a continuação. Concentre o conteúdo novo deste bloco em content_markdown e não repita recursos já apresentados anteriormente.`
+        : '';
 
     return `Metadados do arquivo completo:
 Nome original: ${context.fileName}
@@ -606,6 +627,7 @@ Transforme SOMENTE o conteúdo deste bloco em JSON estruturado de estudo.
 Use exatamente os metadados canônicos informados acima em topic_title, discipline e topic_id.
 Não repita conteúdo de outros blocos, não antecipe blocos seguintes e não omita conteúdo deste bloco.
 Retorne em sections apenas as seções derivadas deste bloco. Os section_id serão renumerados após a consolidação.
+${continuationInstruction}
 ${expectedSectionTitles.length > 0
     ? `Retorne exatamente ${expectedSectionTitles.length} seção(ões), nesta ordem, correspondentes exclusivamente aos títulos ##: ${expectedSectionTitles.join(' | ')}. Cabeçalhos ### e inferiores permanecem dentro de content_markdown da seção ## pai.`
     : 'Este bloco não possui título ##; não invente subdivisões além da estrutura necessária para transportar o conteúdo.'}
@@ -613,6 +635,114 @@ ${expectedSectionTitles.length > 0
 Conteúdo do bloco:
 
 ${block}`;
+}
+
+function mergeSectionFragments(base, continuation) {
+    const merged = { ...base };
+    const baseContent = typeof base?.content_markdown === 'string' ? base.content_markdown.trim() : '';
+    const continuationContent = typeof continuation?.content_markdown === 'string'
+        ? continuation.content_markdown.trim()
+        : '';
+
+    if (baseContent && continuationContent) {
+        merged.content_markdown = `${baseContent}\n\n${continuationContent}`;
+    } else {
+        merged.content_markdown = baseContent || continuationContent;
+    }
+
+    ['callouts', 'mnemonics', 'flashcards'].forEach(field => {
+        const baseItems = Array.isArray(base?.[field]) ? base[field] : [];
+        const continuationItems = Array.isArray(continuation?.[field]) ? continuation[field] : [];
+        merged[field] = [...baseItems, ...continuationItems];
+    });
+
+    const baseMermaid = typeof base?.mermaid_mindmap === 'string' ? base.mermaid_mindmap.trim() : '';
+    const continuationMermaid = typeof continuation?.mermaid_mindmap === 'string'
+        ? continuation.mermaid_mindmap.trim()
+        : '';
+    merged.mermaid_mindmap = baseMermaid || continuationMermaid;
+    return merged;
+}
+
+function getSourceSectionHierarchy(markdown) {
+    const sections = [];
+    let currentSection = null;
+
+    String(markdown || '').split(/\r?\n/).forEach(line => {
+        const heading = line.trim().match(/^(#{2,6})(?!#)\s+(.+?)\s*#*\s*$/);
+        if (!heading) return;
+
+        const level = heading[1].length;
+        const title = normalizeStudyTitle(heading[2], markdown);
+        const key = normalizeTitleKey(title);
+        if (level === 2) {
+            currentSection = { title, key, descendants: new Map() };
+            sections.push(currentSection);
+            return;
+        }
+
+        if (currentSection && key && !currentSection.descendants.has(key)) {
+            currentSection.descendants.set(key, { title, level });
+        }
+    });
+
+    return sections;
+}
+
+function prependSourceHeading(section, sourceHeading) {
+    const content = typeof section?.content_markdown === 'string'
+        ? section.content_markdown.trim()
+        : '';
+    const firstLine = content.split(/\r?\n/, 1)[0] || '';
+    const firstHeading = firstLine.match(/^#{3,6}\s+(.+?)\s*#*\s*$/);
+    if (firstHeading && normalizeTitleKey(firstHeading[1]) === normalizeTitleKey(sourceHeading.title)) {
+        return { ...section, content_markdown: content };
+    }
+
+    const heading = `${'#'.repeat(sourceHeading.level)} ${sourceHeading.title}`;
+    return {
+        ...section,
+        content_markdown: content ? `${heading}\n\n${content}` : heading
+    };
+}
+
+function reconcilePromotedSubsections(data, markdown) {
+    if (!Array.isArray(data?.sections)) return data;
+
+    const sourceSections = getSourceSectionHierarchy(markdown);
+    if (sourceSections.length === 0) return data;
+
+    const reconciledSections = [];
+    let expectedIndex = 0;
+    let currentSourceSection = null;
+    let changed = false;
+
+    data.sections.forEach(section => {
+        const sectionKey = normalizeTitleKey(normalizeStudyTitle(section?.title));
+        const expectedSection = sourceSections[expectedIndex];
+        if (expectedSection && sectionKey === expectedSection.key) {
+            reconciledSections.push(section);
+            currentSourceSection = expectedSection;
+            expectedIndex += 1;
+            return;
+        }
+
+        const sourceHeading = currentSourceSection?.descendants.get(sectionKey);
+        if (!sourceHeading || reconciledSections.length === 0) {
+            reconciledSections.push(section);
+            return;
+        }
+
+        const previousIndex = reconciledSections.length - 1;
+        const subsection = prependSourceHeading(section, sourceHeading);
+        reconciledSections[previousIndex] = mergeSectionFragments(
+            reconciledSections[previousIndex],
+            subsection
+        );
+        changed = true;
+    });
+
+    return changed ? { ...data, sections: reconciledSections } : data;
 }
 
 function mergeLeiautBlockData(blockData, context) {
@@ -625,7 +755,29 @@ function mergeLeiautBlockData(blockData, context) {
         if (data.sections.length === 0) {
             throw new Error(`Resposta inválida do Gemini no bloco ${index + 1}: nenhuma seção foi retornada.`);
         }
-        sections.push(...data.sections);
+        const continuationTitle = Array.isArray(context?.continuationTitles)
+            ? context.continuationTitles[index]
+            : null;
+        if (!continuationTitle) {
+            sections.push(...data.sections);
+            return;
+        }
+
+        const previous = sections[sections.length - 1];
+        const first = data.sections[0];
+        const previousKey = normalizeTitleKey(normalizeStudyTitle(previous?.title || ''));
+        const firstKey = normalizeTitleKey(normalizeStudyTitle(first?.title || ''));
+        const expectedKey = normalizeTitleKey(normalizeStudyTitle(continuationTitle));
+        if (!previous || previousKey !== expectedKey || firstKey !== expectedKey) {
+            const error = new Error(
+                `Continuação da seção "${continuationTitle}" não pôde ser consolidada no bloco ${index + 1}.`
+            );
+            error.code = 'LEIAUT_CONTINUATION_STRUCTURE_INVALID';
+            throw error;
+        }
+
+        sections[sections.length - 1] = mergeSectionFragments(previous, first);
+        sections.push(...data.sections.slice(1));
     });
 
     const mergedData = {
@@ -643,11 +795,23 @@ async function generateLeiautData(markdownContent, inputPath, options) {
     const sourceBlocks = options.forceSingle
         ? [markdownContent]
         : splitContentIntoBlocks(markdownContent, options.blockInputTokens);
+    const continuationTitles = sourceBlocks.map((block, index) => {
+        if (index === 0) return null;
+        const currentTitles = getLevelTwoHeadingTitles(block);
+        const previousTitles = getLevelTwoHeadingTitles(sourceBlocks[index - 1]);
+        const currentFirst = currentTitles[0];
+        const previousLast = previousTitles[previousTitles.length - 1];
+        if (!currentFirst || !previousLast) return null;
+        return normalizeTitleKey(currentFirst) === normalizeTitleKey(previousLast)
+            ? currentFirst
+            : null;
+    });
     const context = {
         fileName: path.basename(inputPath),
         topicTitle: getFirstHeadingTitle(markdownContent, titleFromFileName(inputPath)),
         discipline: inferDiscipline(markdownContent, inputPath),
-        outline: getMarkdownOutline(markdownContent)
+        outline: getMarkdownOutline(markdownContent),
+        continuationTitles
     };
     context.topicId = slugify(context.topicTitle, 'topico-indefinido');
 
@@ -672,7 +836,8 @@ async function generateLeiautData(markdownContent, inputPath, options) {
             buildLeiautBlockPrompt(sourceBlocks[index], {
                 ...context,
                 blockIndex: blockNumber,
-                totalBlocks: sourceBlocks.length
+                totalBlocks: sourceBlocks.length,
+                continuationTitle: continuationTitles[index]
             }),
             options.timeoutMs,
             label
@@ -811,11 +976,15 @@ Regras de Transformação:
    - Use 'warning' somente quando houver risco concreto de erro em prova: exceção ou ressalva, vedação, requisito cumulativo, prazo ou limite numérico, inversão conceitual recorrente, termo técnico facilmente confundível ou entendimento contraintuitivo expressamente sustentado pela fonte.
    - Não use 'warning' apenas para dar ênfase a uma regra geral ou informação importante. Nesses casos, use 'info'. Use 'tip' apenas para método de resolução, memorização ou aplicação prática presente na fonte.
 7. Mnemônicos: A análise editorial de mnemônicos já foi realizada no aplicativo de escrita que produziu a fonte. Não censure, descarte nem reavalie mnemônicos explicitamente presentes no material. Preserve-os no 'content_markdown' e transporte-os para 'mnemonics' com os campos 'key', 'meaning' e 'description'. Se a fonte não contiver mnemônico explícito, retorne 'mnemonics': []. Não invente conteúdo ausente da fonte.
-8. Flashcards: Crie itens novos de CERTO ou ERRADO em quantidade proporcional aos pontos examináveis distintos da seção, sempre restritos ao conteúdo fornecido.
+8. Flashcards: Quando houver base documental suficiente, crie de 3 a 5 flashcards por seção, sem ultrapassar um cartão por ponto examinável distinto e sem inventar cartões apenas para atingir a quantidade mínima.
+   - Cada cartão deve derivar exclusivamente de uma destas bases presentes na própria seção: (a) questão de concurso identificável, incluindo enunciado, alternativa, gabarito ou comentário de resolução; ou (b) redação expressa de artigo, inciso, parágrafo ou outro dispositivo legal.
+   - Se a seção não contiver questão de concurso identificável nem redação legal expressa, retorne 'flashcards': []. Conteúdo teórico isolado, exemplo didático, tabela ou resumo não é base suficiente para criar flashcard.
+   - Quando a base for questão de concurso, converta o ponto efetivamente cobrado em uma assertiva nova de CERTO ou ERRADO. Não copie o enunciado, as alternativas nem dados identificadores da prova.
    - 'question' começa exatamente com "[CERTO/ERRADO]" e apresenta uma assertiva julgável. 'answer' usa "Gabarito: CERTO. Justificativa: ..." ou "Gabarito: ERRADO. Justificativa: ...".
    - Não inclua nome de banca, concurso, cargo, ano, prova, órgão, "questão real", "adaptada" ou equivalentes na pergunta ou na resposta.
-   - Não copie nem parafraseie questões de concurso existentes no original; use somente a explicação teórica independente delas.
+   - Não copie nem parafraseie o texto de questões de concurso existentes no original; extraia somente o ponto jurídico, contábil ou conceitual efetivamente cobrado e confirmado pela resolução presente na fonte.
    - Em conteúdo jurídico, além de CERTO/ERRADO, use "[LETRA DA LEI]" quando a seção contiver a redação expressa de artigo. Cite o artigo na 'question' e use "Texto legal: ..." na 'answer', reproduzindo literalmente somente trecho presente na fonte.
+   - Quando houver simultaneamente questão de concurso e redação legal expressa, distribua os 3 a 5 cartões entre CERTO/ERRADO e LETRA DA LEI, evitando testar a mesma regra duas vezes.
    - Não complete lei, inciso, parágrafo, alternativa, exemplo ou justificativa por memória. Se a redação legal não estiver no material, não gere LETRA DA LEI.
    - Evite testar a mesma afirmação em mais de um cartão.
 9. Mapas Mentais (Mermaid.js): Use Mermaid somente quando a relação couber em um diagrama curto e legível.
@@ -1936,12 +2105,15 @@ async function processarResumo() {
 
     // Grava somente depois das normalizações e da validação estrutural contra a fonte.
     data = validateAndNormalizeOutput(data, inputPath);
+    data = reconcilePromotedSubsections(data, markdownContent);
     assertSectionStructureMatchesSource(data, markdownContent);
     cleanMermaidInSections(data, false);
     assertImportableSections(data);
 
     const outputFileName = `${path.parse(inputPath).name}_processado.json`;
-    const outputPath = path.join(process.cwd(), outputFileName);
+    const outputDirectory = getLeiautOutputDirectory(inputPath);
+    ensureOutputDirectory(outputDirectory);
+    const outputPath = path.join(outputDirectory, outputFileName);
     fs.writeFileSync(outputPath, JSON.stringify(data, null, 2), 'utf-8');
 
     console.log("\n✅ JSON gerado, normalizado quanto ao transporte e Mermaid, e salvo antes do diagnóstico pós-processamento.");
@@ -2006,10 +2178,13 @@ module.exports = {
     normalizeInlineTopicMarkers,
     removeOrphanMarkdownHeadings,
     validateMarkdownInput,
+    reconcilePromotedSubsections,
     assertSectionStructureMatchesSource,
     assertImportableSections,
     getLevelTwoHeadingTitles,
     normalizeMarkdownTransportNewlines,
     normalizeMermaidTransportNewlines,
-    normalizeContentTransportArtifacts
+    normalizeContentTransportArtifacts,
+    getLeiautOutputDirectory,
+    LEIAUT_OUTPUT_ROOT
 };

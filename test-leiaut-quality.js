@@ -1,5 +1,11 @@
 const assert = require('assert');
-const { cleanMermaidCode } = require('./src/app-leiaut');
+const path = require('path');
+const {
+  cleanMermaidCode,
+  getLeiautOutputDirectory,
+  LEIAUT_OUTPUT_ROOT,
+  systemInstruction,
+} = require('./src/app-leiaut');
 const {
   EnrichmentQualityError,
   extractMermaidGraph,
@@ -46,6 +52,20 @@ function makeResponse(overrides = {}) {
 }
 
 console.log('\n🧪 ===== TESTES — Qualidade do enriquecimento LEIAUT =====\n');
+
+test('saída usa a pasta originária abaixo da raiz fixa do LEIAUT', () => {
+  assert.strictEqual(
+    getLeiautOutputDirectory('C:\\materiais\\Contabilidade Geral\\001.md'),
+    path.join(LEIAUT_OUTPUT_ROOT, 'Contabilidade Geral')
+  );
+});
+
+test('prompt limita flashcards a questões de concurso ou letra da lei', () => {
+  assert.match(systemInstruction, /crie de 3 a 5 flashcards por seção/u);
+  assert.match(systemInstruction, /questão de concurso identificável/u);
+  assert.match(systemInstruction, /redação legal expressa/u);
+  assert.match(systemInstruction, /retorne 'flashcards': \[\]/u);
+});
 
 test('mnemônico já analisado na fonte não é bloqueado pelo LEIAUT', () => {
   const response = makeResponse({ mnemonics: [{
