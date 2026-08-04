@@ -9,6 +9,8 @@ service-account*.json
 *.log
 logs/
 *_processado.json
+*_processado_diagnostico.log
+auditoria_pospygem.md
 .vscode/
 .idea/
 Thumbs.db
