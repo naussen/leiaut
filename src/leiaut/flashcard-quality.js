@@ -90,17 +90,20 @@ function validateFlashcard(section, flashcard, index) {
   }
 
   if (type === 'law') {
-    const articleMatch = question.match(/\bArt(?:igo)?\.?\s*(\d+[A-Za-z]?)/iu);
+    const articleMatch = question.match(/\bArts?\.?\s*(\d+[A-Za-z]?)/iu);
     if (!articleMatch) {
       issues.push(`${prefix}.question: LETRA DA LEI deve citar um artigo numerado.`);
     } else {
-      const sourceArticlePattern = new RegExp(`\\bArt(?:igo)?\\.?\\s*${articleMatch[1]}(?:º|°|o)?\\b`, 'iu');
+      const sourceArticlePattern = new RegExp(`\\bArts?\\.?\\s*${articleMatch[1]}(?:º|°|o)?\\b`, 'iu');
       if (!sourceArticlePattern.test(section.content_markdown)) {
         issues.push(`${prefix}.question: o artigo citado nao consta na fonte da secao.`);
       }
     }
-    const legalText = answer.replace(/^Texto legal:\s*/iu, '').replace(/[.!?]\s*$/u, '').trim();
-    if (!/^Texto legal:\s*\S/iu.test(answer)) {
+    const legalTextMatch = answer.match(/\bTexto legal:\s*(\S[\s\S]*)/iu);
+    const legalText = legalTextMatch
+      ? legalTextMatch[1].replace(/[.!?]\s*$/u, '').trim()
+      : '';
+    if (!legalTextMatch) {
       issues.push(`${prefix}.answer: LETRA DA LEI exige "Texto legal: ...".`);
     } else if (
       canonicalLegalText(legalText).length < 12
