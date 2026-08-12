@@ -12,7 +12,7 @@ Cópia independente do LEIAUT para converter Markdown em JSON estruturado usando
 ## Instalação
 
 ```powershell
-cd C:\leiaut
+cd C:\PRO\leiaut
 npm.cmd install
 Copy-Item .env.example .env
 ```
