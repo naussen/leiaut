@@ -102,6 +102,12 @@ O pipeline normaliza o contrato, remove subtítulos Markdown órfãos, confere a
 
 A análise editorial de mnemônicos pertence ao aplicativo de escrita PYGEM. O LEIAUT não aplica heurísticas, censura ou gate de reprovação para mnemônicos. Quando a fonte contiver itens explicitamente estruturáveis, eles são transportados para `sections[].mnemonics`; quando não houver, o campo permanece como array vazio. A validação local limita-se ao formato exigido pelo contrato JSON (`key`, `meaning` e `description`).
 
+## Manifesto visual PYGEM
+
+O LEIAUT aceita `--visual-manifest caminho.json`. Sem essa opção, procura automaticamente `_visual-manifest.json` ou `_visual-plan.json` ao lado do Markdown. O leitor valida o schema, associa os tópicos por `source_index` ou título e confere o hash SHA-256 quando o manifesto o fornece.
+
+O contrato visual é inserido no prompt como instrução restrita: o LEIAUT deve transportar tabela, Mermaid, realce e mnemônico como o mesmo tipo de recurso, sem substituir uma ferramenta por outra. Depois da normalização, é gravado um arquivo `<saida>.visual-validation.json` contendo somente contagens, tópicos, hash do manifesto e divergências; o texto de estudo não é copiado para esse relatório. Neste pacote, divergências são reportadas; o bloqueio da publicação será ativado no pacote de validação anterior à gravação.
+
 ## Modos sem IA
 
 Gerar estrutura determinística sem chamar o Vertex AI:

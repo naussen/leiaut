@@ -11,6 +11,7 @@ require('dotenv').config();
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const nodeAssert = require('assert');
 const {
   validateAndNormalizeOutput,
   normalizeMarkdownTransportNewlines,
@@ -49,6 +50,16 @@ const {
   calculateFlexibleOutputTokens,
 } = require('./src/app-leiaut');
 const { splitContentIntoBlocks } = require('./src/services/tokenService');
+const {
+  loadVisualManifest,
+  buildVisualPromptInstruction,
+} = require('./src/visual/visualManifestReader');
+const {
+  observeMarkdownResources,
+  observeJsonResources,
+  validateVisualManifestOutput,
+  writeVisualValidationReport,
+} = require('./src/visual/visualComplianceValidator');
 
 // ============================================================
 // Mini framework de teste
@@ -56,6 +67,79 @@ const { splitContentIntoBlocks } = require('./src/services/tokenService');
 let passed = 0;
 let failed = 0;
 const failures = [];
+
+function assert(condition, testName) {
+  if (condition) {
+    passed++;
+    console.log(`  ✅ ${testName}`);
+  } else {
+    failed++;
+    failures.push(testName);
+    console.error(`  ❌ ${testName}`);
+  }
+}
+
+// ============================================================
+// Contrato visual PYGEM -> LEIAUT
+// ============================================================
+{
+  const visualDir = fs.mkdtempSync(path.join(os.tmpdir(), 'leiaut-visual-'));
+  try {
+    const inputPath = path.join(visualDir, '010_teste.md');
+    const planPath = path.join(visualDir, '_visual-plan.json');
+    const markdown = [
+      '## Teste visual', '',
+      '| Regra | Valor |', '| --- | --- |', '| A | B |', '',
+      '### Fluxo', '', '```mermaid', 'flowchart TD', 'A --> B', '```', '',
+      '> **Atenção:** preserve a regra.', '',
+      '**Mnemônico:** ABC.',
+    ].join('\n');
+    const plan = {
+      schema_version: 1,
+      guide_id: 'teste-visual-v1',
+      guide_sha256: '0'.repeat(64),
+      diversification_seed: 'teste-v1',
+      topics: [{
+        source_index: '010',
+        canonical_title: 'Teste visual',
+        topic_slug: 'teste-visual',
+        requirements: [
+          { resource: 'table', semantic_role: 'comparison', required: true, minimum: 1, maximum: 1 },
+          { resource: 'mermaid', semantic_role: 'process_flow', required: true, minimum: 1, maximum: 1 },
+          { resource: 'highlight', semantic_role: 'rule', required: true, minimum: 1, maximum: 1 },
+          { resource: 'mnemonic', semantic_role: 'memory_key', required: true, minimum: 1, maximum: 1 },
+        ],
+      }],
+    };
+    fs.writeFileSync(inputPath, markdown, 'utf8');
+    fs.writeFileSync(planPath, `${JSON.stringify(plan)}\n`, 'utf8');
+    const context = loadVisualManifest({ inputPath, markdown });
+    assert(context && context.topics.length === 1, 'Manifesto visual irmão é descoberto e associado');
+    assert(buildVisualPromptInstruction(context).includes('Não substitua tabela por Mermaid'), 'Prompt restringe substituição de recurso visual');
+    nodeAssert.deepStrictEqual(observeMarkdownResources(markdown), { table: 1, mermaid: 1, highlight: 1, mnemonic: 1 });
+    const data = {
+      sections: [{
+        title: 'Teste visual',
+        content_markdown: '| Regra | Valor |\n| --- | --- |\n| A | B |',
+        callouts: [{ type: 'warning', title: 'Atenção', text: 'Preserve a regra.' }],
+        mnemonics: [{ key: 'ABC', meaning: 'Regra', description: 'Memória.' }],
+        flashcards: [],
+        mermaid_mindmap: 'flowchart TD\nA --> B',
+      }],
+    };
+    nodeAssert.deepStrictEqual(observeJsonResources(data), { table: 1, mermaid: 1, highlight: 1, mnemonic: 1 });
+    const result = validateVisualManifestOutput(data, markdown, context);
+    assert(result.valid, 'Saída JSON compatível com manifesto deve ser aceita');
+    const reportPath = writeVisualValidationReport(path.join(visualDir, 'saida.json'), context, result);
+    assert(fs.existsSync(reportPath), 'Relatório visual agregado é gravado');
+    const report = JSON.parse(fs.readFileSync(reportPath, 'utf8'));
+    assert(!Object.hasOwn(report, 'content_markdown'), 'Relatório não contém conteúdo privado');
+    const invalidData = { ...data, sections: [{ ...data.sections[0], callouts: [] }] };
+    assert(!validateVisualManifestOutput(invalidData, markdown, context).valid, 'Perda de realce no JSON é reportada');
+  } finally {
+    fs.rmSync(visualDir, { recursive: true, force: true });
+  }
+}
 
 function assert(condition, testName) {
   if (condition) {

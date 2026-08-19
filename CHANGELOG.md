@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-08-19 — manifesto visual
+
+- adiciona leitura de `_visual-plan.json` e `--visual-manifest` com validação de hash;
+- injeta instrução restrita de preservação de recursos visuais no prompt do LEIAUT;
+- compara recursos do Markdown com o JSON e gera relatório `.visual-validation.json` sem conteúdo privado;
+- associa tópicos do manifesto por `source_index` ou título canônico.
+
 ## 2026-08-19
 
 - separa as tentativas por indisponibilidade transitória das tentativas por `MAX_TOKENS`;

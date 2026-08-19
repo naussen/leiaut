@@ -4,6 +4,14 @@ const path = require('path');
 const { createVertexAIClient, getVertexAIConfig } = require('./config/vertex-ai');
 const { estimateTokens, splitContentIntoBlocks } = require('./services/tokenService');
 const { validateTopicFlashcards } = require('./leiaut/flashcard-quality');
+const {
+    loadVisualManifest,
+    buildVisualPromptInstruction,
+} = require('./visual/visualManifestReader');
+const {
+    validateVisualManifestOutput,
+    writeVisualValidationReport,
+} = require('./visual/visualComplianceValidator');
 require('dotenv').config();
 
 /**
@@ -65,12 +73,30 @@ function getNonNegativeIntegerEnv(name, fallback) {
 }
 
 function parseLeiautArgs(args) {
+    const valueOptions = new Set(['--visual-manifest']);
+    const positional = [];
+    for (let index = 0; index < args.length; index += 1) {
+        if (valueOptions.has(args[index])) {
+            if (!args[index + 1] || args[index + 1].startsWith('--')) {
+                const error = new Error('--visual-manifest exige o caminho de um arquivo JSON.');
+                error.code = 'LEIAUT_VISUAL_MANIFEST_PATH_REQUIRED';
+                throw error;
+            }
+            index += 1;
+            continue;
+        }
+        if (!args[index].startsWith('--')) positional.push(args[index]);
+    }
     return {
-        inputFile: args.find(arg => !arg.startsWith('--')) || 'direito_constitucional.md',
+        inputFile: positional[0] || 'direito_constitucional.md',
         forceLarge: args.includes('--force-large'),
         noAi: args.includes('--no-ai') || args.includes('--split-by-topic'),
         splitByTopic: args.includes('--split-by-topic'),
-        dryRun: args.includes('--dry-run')
+        dryRun: args.includes('--dry-run'),
+        visualManifest: (() => {
+            const index = args.indexOf('--visual-manifest');
+            return index >= 0 ? args[index + 1] || null : null;
+        })(),
     };
 }
 
@@ -1051,6 +1077,9 @@ function parseModelJsonResponse(response, label) {
 function buildLeiautBlockPrompt(block, context) {
     const outline = getMarkdownOutline(block) || '(sem cabeçalhos de nível 1 a 3)';
     const expectedSectionTitles = getLevelTwoHeadingTitles(block);
+    const visualPromptInstruction = context.visualPromptInstruction
+        ? `\n${context.visualPromptInstruction}\n`
+        : '';
 
     return `Metadados do arquivo completo:
 Nome original: ${context.fileName}
@@ -1071,6 +1100,8 @@ ${expectedSectionTitles.length > 0
     : 'Este bloco não possui título ##; não invente subdivisões além da estrutura necessária para transportar o conteúdo.'}
 
 Conteúdo do bloco:
+
+${visualPromptInstruction}
 
 ${block}`;
 }
@@ -1108,7 +1139,8 @@ async function generateLeiautData(markdownContent, inputPath, options) {
     const context = {
         fileName: path.basename(inputPath),
         topicTitle: getCanonicalTopicTitle(markdownContent, titleFromFileName(inputPath)),
-        discipline: inferDiscipline(markdownContent, inputPath)
+        discipline: inferDiscipline(markdownContent, inputPath),
+        visualPromptInstruction: buildVisualPromptInstruction(options.visualManifestContext),
     };
     context.topicId = slugify(context.topicTitle, 'topico-indefinido');
 
@@ -2348,6 +2380,17 @@ async function processMarkdownFile(inputPath, args, outputBaseDir = process.cwd(
     const rawMarkdownContent = fs.readFileSync(inputPath, 'utf-8');
     const normalizedMarkdownContent = normalizeInlineTopicMarkers(rawMarkdownContent);
     const markdownContent = removePygemRecoveryMarkers(normalizedMarkdownContent);
+    const visualManifestContext = loadVisualManifest({
+      inputPath,
+      explicitPath: args.visualManifest,
+      markdown: markdownContent,
+    });
+    if (visualManifestContext) {
+      console.log(
+        `🎨 Manifesto visual carregado: ${path.basename(visualManifestContext.manifestPath)}; `
+        + `${visualManifestContext.topics.length} tópico(s) associado(s).`
+      );
+    }
     if (normalizedMarkdownContent !== rawMarkdownContent) {
       const normalizedMarkers = (rawMarkdownContent.match(/^@@@[ \t]+##(?!#)[ \t]+\S.*$/gm) || []).length;
       console.warn(
@@ -2452,6 +2495,16 @@ async function processMarkdownFile(inputPath, args, outputBaseDir = process.cwd(
       });
       outputs.forEach(output => validateAndNormalizeOutput(output.data, inputPath));
       const outputPaths = saveDeterministicOutputs(outputs, inputPath, args.dryRun, outputBaseDir);
+      if (visualManifestContext && !args.dryRun) {
+        outputPaths.forEach((outputPath, index) => {
+          const result = validateVisualManifestOutput(
+            outputs[index].data,
+            markdownContent,
+            visualManifestContext
+          );
+          writeVisualValidationReport(outputPath, visualManifestContext, result);
+        });
+      }
       const totalSections = outputs.reduce((sum, output) => sum + output.data.sections.length, 0);
 
       if (args.dryRun) {
@@ -2501,7 +2554,8 @@ async function processMarkdownFile(inputPath, args, outputBaseDir = process.cwd(
       outputTokenMultiplier,
       outputTokenRetryMultiplier,
       maxOutputTokenRetryMultiplier,
-      thinkingBudget
+      thinkingBudget,
+      visualManifestContext
     });
 
     // Grava somente depois das normalizações e da validação estrutural contra a fonte.
@@ -2514,6 +2568,14 @@ async function processMarkdownFile(inputPath, args, outputBaseDir = process.cwd(
 
     const outputFileName = `${path.parse(inputPath).name}_processado.json`;
     const outputPath = path.join(outputBaseDir, outputFileName);
+    if (visualManifestContext) {
+      const visualResult = validateVisualManifestOutput(data, markdownContent, visualManifestContext);
+      const visualReportPath = writeVisualValidationReport(outputPath, visualManifestContext, visualResult);
+      console.log(
+        `🎨 Validação visual: ${visualResult.valid ? 'OK' : 'divergências encontradas'}; `
+        + `relatório ${path.basename(visualReportPath)}.`
+      );
+    }
     fs.writeFileSync(outputPath, JSON.stringify(data, null, 2), 'utf-8');
 
     console.log("\n✅ JSON gerado, normalizado quanto ao transporte e Mermaid, e salvo antes do diagnóstico pós-processamento.");
@@ -2665,6 +2727,10 @@ module.exports = {
     splitByHeadingLevel,
     buildLeiautBlockPrompt,
     mergeLeiautBlockData,
+    loadVisualManifest,
+    buildVisualPromptInstruction,
+    validateVisualManifestOutput,
+    writeVisualValidationReport,
     collectPostGenerationDiagnostics,
     formatDiagnosticsLog,
     writePostGenerationDiagnostics,
