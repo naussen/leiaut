@@ -56,6 +56,13 @@ Confirme no Console do Google Cloud que o projeto está associado à conta de fa
 
 ## Uso
 
+Quando `--visual-manifest` é informado, o `topic_slug` aprovado no manifesto é a
+fonte de autoridade do `topic_id`. Slugs suspeitos (fragmentação de OCR,
+separadores inválidos, comprimento desproporcional ou ambiguidade) interrompem o
+processamento antes da publicação. O LEIAUT não migra banco nem URLs; use
+`buildTopicIdMigrationMap` para produzir um mapa explícito antes de reprocessar
+conteúdo já importado.
+
 ```powershell
 npm.cmd run leiaut -- caminho\arquivo.md
 ```

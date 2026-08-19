@@ -12,6 +12,11 @@ const {
     validateVisualManifestOutput,
     writeVisualValidationReport,
 } = require('./visual/visualComplianceValidator');
+const {
+    resolveTopicId,
+    assertUniqueTopicIds,
+    buildTopicIdMigrationMap,
+} = require('./visual/topicIdAuthority');
 require('dotenv').config();
 
 /**
@@ -684,11 +689,16 @@ function buildDeterministicOutputs(markdownContent, inputPath, options = {}) {
     const discipline = inferDiscipline(markdownContent, inputPath);
 
     if (!options.splitByTopic) {
+        const topicId = resolveTopicId({
+            topics: options.visualManifestContext?.topics,
+            topicTitle: fallbackTitle,
+            fallbackTopicId: fallbackTitle,
+        });
         const data = buildDeterministicTopic(
             fallbackTitle,
             markdownContent,
             discipline,
-            fallbackTitle,
+            topicId,
             2,
             { preserveTopicTitle: Boolean(originalDocumentTitle) }
         );
@@ -709,7 +719,7 @@ function buildDeterministicOutputs(markdownContent, inputPath, options = {}) {
                 prefaceTitle,
                 topicSplit.preface,
                 discipline,
-                prefaceTitle,
+                resolveTopicId({ topics: options.visualManifestContext?.topics, topicTitle: prefaceTitle, fallbackTopicId: prefaceTitle }),
                 3,
                 { preserveTopicTitle: Boolean(originalDocumentTitle) }
             )
@@ -721,11 +731,29 @@ function buildDeterministicOutputs(markdownContent, inputPath, options = {}) {
         const sequence = String(topicSequenceStart + index).padStart(3, '0');
         outputs.push({
             fileSuffix: `${sequence}-${slugify(topic.title)}`,
-            data: buildDeterministicTopic(topic.title, topic.body, discipline, topic.title, 3)
+            data: buildDeterministicTopic(
+                topic.title,
+                topic.body,
+                discipline,
+                resolveTopicId({ topics: options.visualManifestContext?.topics, topicTitle: topic.title, fallbackTopicId: topic.title }),
+                3
+            )
         });
     });
 
-    return outputs;
+    return assertUniqueTopicIds(outputs);
+}
+
+function applyCanonicalTopicId(data, context) {
+    if (!data || !context) return data;
+    const previous = data.topic_id;
+    data.topic_id = context.topicId;
+    renumberSectionIds(data);
+    const migration = buildTopicIdMigrationMap({ topic_id: previous, topic_title: data.topic_title }, data, context.fileName);
+    if (migration) {
+        console.warn(`⚠️ topic_id do modelo substituído pelo valor canônico: "${migration.old_topic_id}" -> "${migration.new_topic_id}".`);
+    }
+    return data;
 }
 
 function writeJsonOutput(outputPath, data) {
@@ -1149,7 +1177,11 @@ async function generateLeiautData(markdownContent, inputPath, options) {
         discipline: inferDiscipline(markdownContent, inputPath),
         visualPromptInstruction: buildVisualPromptInstruction(options.visualManifestContext),
     };
-    context.topicId = slugify(context.topicTitle, 'topico-indefinido');
+    context.topicId = resolveTopicId({
+        topics: options.visualManifestContext?.topics,
+        topicTitle: context.topicTitle,
+        fallbackTopicId: context.topicTitle,
+    });
 
     if (sourceBlocks.length === 1) {
         const label = 'arquivo completo';
@@ -1165,6 +1197,7 @@ async function generateLeiautData(markdownContent, inputPath, options) {
             options
         );
         const parsedFile = parseModelJsonResponse(response, label);
+        applyCanonicalTopicId(parsedFile, context);
         canonicalizeSectionTitlesFromSource(parsedFile, markdownContent);
         assertSectionStructureMatchesSource(parsedFile, markdownContent);
         return parsedFile;
@@ -1192,6 +1225,7 @@ async function generateLeiautData(markdownContent, inputPath, options) {
             options
         );
         const parsedBlock = parseModelJsonResponse(response, label);
+        applyCanonicalTopicId(parsedBlock, context);
         canonicalizeSectionTitlesFromSource(parsedBlock, sourceBlocks[index]);
         assertSectionStructureMatchesSource(parsedBlock, sourceBlocks[index]);
         blockData.push(parsedBlock);
@@ -2498,7 +2532,8 @@ async function processMarkdownFile(inputPath, args, outputBaseDir = process.cwd(
     if (args.noAi) {
       console.log(`🧭 Modo determinístico ativado (${args.splitByTopic ? 'split por tópico ##' : 'arquivo único'}). Nenhuma chamada ao Gemini será feita.`);
       const outputs = buildDeterministicOutputs(markdownContent, inputPath, {
-        splitByTopic: args.splitByTopic
+        splitByTopic: args.splitByTopic,
+        visualManifestContext
       });
       outputs.forEach(output => validateAndNormalizeOutput(output.data, inputPath));
       const plannedOutputPaths = saveDeterministicOutputs(outputs, inputPath, true, outputBaseDir);
@@ -2755,6 +2790,9 @@ module.exports = {
     extractOriginalDocumentTitle,
     getCanonicalTopicTitle,
     buildDeterministicOutputs,
+    resolveTopicId,
+    assertUniqueTopicIds,
+    buildTopicIdMigrationMap,
     writeJsonOutput,
     splitByHeadingLevel,
     buildLeiautBlockPrompt,

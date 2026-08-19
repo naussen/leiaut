@@ -7,9 +7,9 @@
   "scripts": {
     "start": "node src/app-leiaut.js",
     "leiaut": "node src/app-leiaut.js",
-    "test": "node test-vertex-ai-config.js && node test-leiaut.js && node test-leiaut-quality.js && node test-leiaut-publication.js",
+    "test": "node test-vertex-ai-config.js && node test-topic-id.js && node test-leiaut.js && node test-leiaut-quality.js && node test-leiaut-publication.js",
     "test:vertex": "node test-vertex-ai-config.js",
-    "check": "node --check src/app-leiaut.js && node --check src/config/vertex-ai.js"
+    "check": "node --check src/app-leiaut.js && node --check src/config/vertex-ai.js && node --check src/visual/topicIdAuthority.js"
   },
   "engines": {
     "node": ">=20.0.0"

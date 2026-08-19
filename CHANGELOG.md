@@ -9,6 +9,9 @@
 - transforma divergência visual obrigatória em erro antes da gravação;
 - preserva JSON anterior quando a validação visual falha;
 - grava JSONs aprovados por arquivo temporário e renomeação atômica.
+- usa `topic_slug` aprovado no manifesto como autoridade do `topic_id`;
+- rejeita slugs fragmentados, ambíguos ou duplicados no lote;
+- expõe mapa explícito para migração `topic_id` antigo → novo, sem alterar banco.
 
 ## 2026-08-19
 
