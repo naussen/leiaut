@@ -15,6 +15,7 @@ require('dotenv').config();
 // O cliente é inicializado somente quando há chamada de IA. Assim, testes e modos
 // determinísticos não exigem credenciais, projeto GCP ou acesso à rede.
 let vertexAIClient = null;
+let lastVertexRequestFinishedAt = 0;
 
 function getVertexAIClient() {
   if (!vertexAIClient) {
@@ -25,7 +26,22 @@ function getVertexAIClient() {
 
 const DEFAULT_LEIAUT_MAX_INPUT_TOKENS = 30000;
 const DEFAULT_LEIAUT_BLOCK_INPUT_TOKENS = 5000;
+const DEFAULT_LEIAUT_MAX_SECTION_TOKENS = 10000;
 const DEFAULT_LEIAUT_TIMEOUT_MS = 180000;
+const DEFAULT_LEIAUT_MAX_RETRIES = 2;
+const DEFAULT_LEIAUT_MAX_TOKEN_RETRIES = 3;
+const DEFAULT_LEIAUT_RETRY_BASE_DELAY_MS = 10000;
+const DEFAULT_LEIAUT_RETRY_MAX_DELAY_MS = 60000;
+const DEFAULT_LEIAUT_REQUEST_COOLDOWN_MS = 2000;
+const DEFAULT_LEIAUT_MIN_OUTPUT_TOKENS = 4096;
+const DEFAULT_LEIAUT_MAX_OUTPUT_TOKENS = 65536;
+const DEFAULT_LEIAUT_OUTPUT_TOKEN_MULTIPLIER = 2;
+const DEFAULT_LEIAUT_OUTPUT_TOKEN_RETRY_MULTIPLIER = 2;
+const DEFAULT_LEIAUT_MAX_OUTPUT_TOKEN_RETRY_MULTIPLIER = 8;
+const DEFAULT_LEIAUT_THINKING_BUDGET = 0;
+const MAX_LEIAUT_RETRIES = 2;
+const MAX_LEIAUT_TOKEN_RETRIES = 3;
+const RETRYABLE_VERTEX_STATUSES = new Set([429, 500, 503]);
 const MAX_MARKDOWN_LINE_LENGTH = 20000;
 const MAX_HORIZONTAL_WHITESPACE_RUN = 1000;
 const CANONICAL_ACRONYMS = new Map([
@@ -43,6 +59,11 @@ function getPositiveIntegerEnv(name, fallback) {
     return Number.isInteger(value) && value > 0 ? value : fallback;
 }
 
+function getNonNegativeIntegerEnv(name, fallback) {
+    const value = Number(process.env[name]);
+    return Number.isInteger(value) && value >= 0 ? value : fallback;
+}
+
 function parseLeiautArgs(args) {
     return {
         inputFile: args.find(arg => !arg.startsWith('--')) || 'direito_constitucional.md',
@@ -50,6 +71,42 @@ function parseLeiautArgs(args) {
         noAi: args.includes('--no-ai') || args.includes('--split-by-topic'),
         splitByTopic: args.includes('--split-by-topic'),
         dryRun: args.includes('--dry-run')
+    };
+}
+
+function resolveMarkdownInputPaths(inputPath) {
+    const inputStats = fs.statSync(inputPath);
+    if (inputStats.isFile()) {
+      return {
+        inputType: 'file',
+        files: [inputPath]
+      };
+    }
+
+    if (!inputStats.isDirectory()) {
+      const error = new Error(`O caminho de entrada não é um arquivo nem um diretório: ${inputPath}`);
+      error.code = 'LEIAUT_INPUT_TYPE_INVALID';
+      throw error;
+    }
+
+    const files = fs.readdirSync(inputPath, { withFileTypes: true })
+      .filter(entry => entry.isFile() && path.extname(entry.name).toLowerCase() === '.md')
+      .map(entry => path.join(inputPath, entry.name))
+      .sort((left, right) => path.basename(left).localeCompare(
+        path.basename(right),
+        'pt-BR',
+        { numeric: true, sensitivity: 'base' }
+      ));
+
+    if (files.length === 0) {
+      const error = new Error(`Nenhum arquivo Markdown (.md) foi encontrado diretamente em: ${inputPath}`);
+      error.code = 'LEIAUT_INPUT_DIRECTORY_EMPTY';
+      throw error;
+    }
+
+    return {
+      inputType: 'directory',
+      files
     };
 }
 
@@ -62,6 +119,24 @@ function normalizeInlineTopicMarkers(content) {
         /^([ \t]*)@@@[ \t]+(##(?!#)[ \t]+\S.*)$/gm,
         '$1@@@\n$1$2'
     );
+}
+
+function removePygemRecoveryMarkers(content) {
+    return String(content || '')
+        .split(/\r?\n/)
+        .filter(line => {
+            const markerText = line
+                .trim()
+                .replace(/^@@@[ \t]*/, '')
+                .replace(/^##(?!#)[ \t]*/, '')
+                .replace(/[ \t]+#+[ \t]*$/, '')
+                .normalize('NFD')
+                .replace(/[\u0300-\u036f]/g, '')
+                .toLocaleLowerCase('pt-BR')
+                .trim();
+            return markerText !== 'recuperacao de bloco';
+        })
+        .join('\n');
 }
 
 function getMarkdownOutline(content, limit = 40) {
@@ -92,6 +167,10 @@ function normalizeTitleKey(value) {
         .replace(/[^\p{L}\p{N}]+/gu, ' ')
         .replace(/\s+/g, ' ')
         .trim();
+}
+
+function normalizeLegalArticleCitationKey(value) {
+    return normalizeTitleKey(value).replace(/\barts?\b(?=\s+\d)/g, 'art');
 }
 
 function isPredominantlyUppercaseTitle(value) {
@@ -155,11 +234,12 @@ function removeOrphanMarkdownHeadings(markdown) {
 }
 
 function getLevelTwoHeadingTitles(markdown) {
+    const titleContext = getTitleNormalizationContext(markdown);
     return String(markdown || '')
         .split(/\r?\n/)
         .map(line => line.trim())
         .filter(line => /^##(?!#)\s+\S/.test(line))
-        .map(line => normalizeStudyTitle(stripHeadingSyntax(line), markdown));
+        .map(line => normalizeStudyTitle(stripHeadingSyntax(line), titleContext));
 }
 
 function getStudyContentContext(data) {
@@ -273,6 +353,99 @@ function assertSectionStructureMatchesSource(data, markdown) {
     return data;
 }
 
+function canonicalizeSectionTitlesFromSource(data, markdown) {
+    const expectedTitles = getLevelTwoHeadingTitles(markdown);
+    if (!Array.isArray(data?.sections) || data.sections.length !== expectedTitles.length) return data;
+
+    data.sections.forEach((section, index) => {
+        const expectedTitle = expectedTitles[index];
+        const actualTitle = normalizeStudyTitle(section?.title);
+        const exactMatch = normalizeTitleKey(actualTitle) === normalizeTitleKey(expectedTitle);
+        const legalArticleAbbreviationMatch = normalizeLegalArticleCitationKey(actualTitle)
+            === normalizeLegalArticleCitationKey(expectedTitle);
+        const expectedWithoutParenthetical = expectedTitle
+            .replace(/\s*\([^()]*\)\s*/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
+        const omittedParenthetical = expectedWithoutParenthetical !== expectedTitle
+            && normalizeTitleKey(actualTitle) === normalizeTitleKey(expectedWithoutParenthetical);
+
+        if (exactMatch || legalArticleAbbreviationMatch || omittedParenthetical) {
+            section.title = expectedTitle;
+        }
+    });
+
+    return data;
+}
+
+function getMarkdownHeadingSections(markdown) {
+    const lines = String(markdown || '').split(/\r?\n/);
+    const headings = [];
+
+    lines.forEach((line, index) => {
+        const match = line.trim().match(/^(#{1,6})\s+(.+?)\s*#*\s*$/);
+        if (!match) return;
+        headings.push({
+            index,
+            level: match[1].length,
+            title: normalizeStudyTitle(stripHeadingSyntax(line.trim()), markdown),
+        });
+    });
+
+    return headings.map((heading, index) => {
+        const nextHeading = headings
+            .slice(index + 1)
+            .find(candidate => candidate.level <= heading.level);
+        const bodyEnd = nextHeading ? nextHeading.index : lines.length;
+        return {
+            title: heading.title,
+            body: lines.slice(heading.index + 1, bodyEnd).join('\n').trim(),
+        };
+    });
+}
+
+function getTitleNormalizationContext(content) {
+    return String(content || '')
+        .split(/\r?\n/)
+        .filter(line => {
+            const trimmed = line.trim();
+            return !/^@@@?[ \t]+(?!#)/.test(trimmed)
+                && !/^#{1,6}\s+\S/.test(trimmed);
+        })
+        .join('\n');
+}
+
+function recoverEmptySectionsFromSource(data, markdown) {
+    if (!Array.isArray(data?.sections)) return data;
+
+    const sourceSectionsByTitle = new Map();
+    getMarkdownHeadingSections(markdown).forEach(sourceSection => {
+        const key = normalizeTitleKey(sourceSection.title);
+        const entries = sourceSectionsByTitle.get(key) || [];
+        entries.push(sourceSection);
+        sourceSectionsByTitle.set(key, entries);
+    });
+
+    data.sections.forEach((section, index) => {
+        if (sectionHasUsefulContent(section)) return;
+
+        const candidates = sourceSectionsByTitle.get(normalizeTitleKey(section?.title)) || [];
+        if (candidates.length !== 1) return;
+
+        const sourceBody = candidates[0].body;
+        const meaningfulBody = sourceBody.replace(/^@@@\s*$/gm, '').trim();
+        if (!meaningfulBody) return;
+
+        section.content_markdown = sourceBody;
+        console.warn(
+            `⚠️ Seção ${index + 1} ('${section.title}') veio vazia da IA; `
+            + 'o corpo Markdown literal do cabeçalho único correspondente foi restaurado da fonte.'
+        );
+    });
+
+    return data;
+}
+
 function titleFromFileName(filePath) {
     const baseName = path.basename(filePath, path.extname(filePath));
     const spaced = baseName.replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim();
@@ -362,7 +535,36 @@ function inferDiscipline(content, filePath = '') {
 
 function getFirstHeadingTitle(content, fallbackTitle) {
     const firstHeading = String(content || '').split('\n').find(line => /^#{1,6}\s+\S/.test(line.trim()));
-    return normalizeStudyTitle(firstHeading ? stripHeadingSyntax(firstHeading.trim()) : fallbackTitle, content);
+    return normalizeStudyTitle(
+        firstHeading ? stripHeadingSyntax(firstHeading.trim()) : fallbackTitle,
+        getTitleNormalizationContext(content)
+    );
+}
+
+function extractOriginalDocumentTitle(content) {
+    const normalizedContent = String(content || '').replace(/^\uFEFF/, '');
+    const lines = normalizedContent.split(/\r?\n/);
+    const firstContentIndex = lines.findIndex(line => line.trim());
+    const firstContentLine = firstContentIndex >= 0 ? lines[firstContentIndex] : null;
+    const match = firstContentLine?.trim().match(/^@@@?[ \t]+(?!#)(\S.*?)[ \t]*$/);
+    if (!match) return null;
+
+    const normalizedMarkerTitle = normalizeTitleKey(match[1]);
+    return normalizedMarkerTitle === 'recuperacao de bloco'
+        ? null
+        : normalizeStudyTitle(match[1], getTitleNormalizationContext(normalizedContent));
+}
+
+function getCanonicalTopicTitle(content, fallbackTitle) {
+    return extractOriginalDocumentTitle(content)
+        ?? getFirstHeadingTitle(content, fallbackTitle);
+}
+
+function getOriginalDocumentTitleFromFile(sourceFilePath) {
+    if (!sourceFilePath || !fs.existsSync(sourceFilePath)) return null;
+    const stats = fs.statSync(sourceFilePath);
+    if (!stats.isFile()) return null;
+    return extractOriginalDocumentTitle(fs.readFileSync(sourceFilePath, 'utf8'));
 }
 
 function splitByHeadingLevel(content, level) {
@@ -412,8 +614,17 @@ function makeEmptyStudySection(sectionId, title, contentMarkdown) {
     };
 }
 
-function buildDeterministicTopic(topicTitle, topicMarkdown, discipline, topicIdBase, sectionHeadingLevel = 3) {
-    const normalizedTopicTitle = normalizeStudyTitle(topicTitle, topicMarkdown);
+function buildDeterministicTopic(
+    topicTitle,
+    topicMarkdown,
+    discipline,
+    topicIdBase,
+    sectionHeadingLevel = 3,
+    options = {}
+) {
+    const normalizedTopicTitle = options.preserveTopicTitle
+        ? String(topicTitle || '').trim()
+        : normalizeStudyTitle(topicTitle, topicMarkdown);
     const topicId = slugify(topicIdBase || normalizedTopicTitle, 'topico-indefinido');
     const sections = [];
     const sectionSplit = splitByHeadingLevel(topicMarkdown, sectionHeadingLevel);
@@ -442,7 +653,8 @@ function buildDeterministicTopic(topicTitle, topicMarkdown, discipline, topicIdB
 }
 
 function buildDeterministicOutputs(markdownContent, inputPath, options = {}) {
-    const fallbackTitle = getFirstHeadingTitle(markdownContent, titleFromFileName(inputPath));
+    const originalDocumentTitle = extractOriginalDocumentTitle(markdownContent);
+    const fallbackTitle = getCanonicalTopicTitle(markdownContent, titleFromFileName(inputPath));
     const discipline = inferDiscipline(markdownContent, inputPath);
 
     if (!options.splitByTopic) {
@@ -451,7 +663,8 @@ function buildDeterministicOutputs(markdownContent, inputPath, options = {}) {
             markdownContent,
             discipline,
             fallbackTitle,
-            2
+            2,
+            { preserveTopicTitle: Boolean(originalDocumentTitle) }
         );
         return [{ fileSuffix: '', data }];
     }
@@ -466,7 +679,14 @@ function buildDeterministicOutputs(markdownContent, inputPath, options = {}) {
         const prefaceTitle = fallbackTitle === titleFromFileName(inputPath) ? 'Introducao' : fallbackTitle;
         outputs.push({
             fileSuffix: `001-${slugify(prefaceTitle)}`,
-            data: buildDeterministicTopic(prefaceTitle, topicSplit.preface, discipline, prefaceTitle, 3)
+            data: buildDeterministicTopic(
+                prefaceTitle,
+                topicSplit.preface,
+                discipline,
+                prefaceTitle,
+                3,
+                { preserveTopicTitle: Boolean(originalDocumentTitle) }
+            )
         });
     }
 
@@ -486,16 +706,16 @@ function writeJsonOutput(outputPath, data) {
     fs.writeFileSync(outputPath, JSON.stringify(data, null, 2), 'utf-8');
 }
 
-function saveDeterministicOutputs(outputs, inputPath, dryRun = false) {
+function saveDeterministicOutputs(outputs, inputPath, dryRun = false, outputBaseDir = process.cwd()) {
     const parsed = path.parse(inputPath);
 
     if (outputs.length === 1) {
-        const outputPath = path.join(process.cwd(), `${parsed.name}_processado.json`);
+        const outputPath = path.join(outputBaseDir, `${parsed.name}_processado.json`);
         if (!dryRun) writeJsonOutput(outputPath, outputs[0].data);
         return [outputPath];
     }
 
-    const outputDir = path.join(process.cwd(), `${parsed.name}_processado`);
+    const outputDir = path.join(outputBaseDir, `${parsed.name}_processado`);
     if (!dryRun && !fs.existsSync(outputDir)) {
         fs.mkdirSync(outputDir, { recursive: true });
     }
@@ -516,30 +736,270 @@ function printOutputPaths(outputPaths, limit = 20) {
     }
 }
 
-async function generateStructuredContent(modelName, contents, timeoutMs, label) {
-    const ai = getVertexAIClient();
-    const abortController = new AbortController();
-    const timeoutId = setTimeout(() => abortController.abort(), timeoutMs);
+function getVertexErrorStatus(error) {
+    const candidates = [
+        error?.status,
+        error?.code,
+        error?.error?.code,
+        error?.cause?.status,
+        error?.cause?.code,
+    ];
 
-    try {
-      console.log(`🤖 Enviando ${label} ao Gemini (${modelName})...`);
-      const response = await ai.models.generateContent({
-        model: modelName,
-        contents,
-        config: {
-          systemInstruction: systemInstruction,
-          responseMimeType: "application/json",
-          responseSchema: responseSchema,
-          temperature: 0.2,
-          httpOptions: { timeout: timeoutMs },
-          abortSignal: abortController.signal
-        }
-      });
-
-      return response;
-    } finally {
-      clearTimeout(timeoutId);
+    for (const candidate of candidates) {
+        const numericStatus = Number(candidate);
+        if (Number.isInteger(numericStatus)) return numericStatus;
     }
+
+    const message = String(error?.message || error || '');
+    const statusMatch = message.match(/(?:"code"\s*:\s*|\b)(429|500|503)\b/);
+    if (statusMatch) return Number(statusMatch[1]);
+    if (/RESOURCE_EXHAUSTED/i.test(message)) return 429;
+    if (/\bUNAVAILABLE\b/i.test(message)) return 503;
+    return null;
+}
+
+function isRetryableVertexError(error) {
+    return error?.code === 'LEIAUT_MAX_TOKENS'
+        || RETRYABLE_VERTEX_STATUSES.has(getVertexErrorStatus(error));
+}
+
+function shouldRetryVertexFailure(error, retryState) {
+    if (error?.code === 'LEIAUT_MAX_TOKENS') {
+        return retryState.maxTokenFailureCount <= retryState.maxTokenRetries;
+    }
+    return isRetryableVertexError(error)
+        && retryState.transientFailureCount <= retryState.maxTransientRetries;
+}
+
+function getVertexFinishReason(response) {
+    return response?.candidates?.[0]?.finishReason
+        || response?.response?.candidates?.[0]?.finishReason
+        || null;
+}
+
+function getVertexTokenUsage(response) {
+    const usage = response?.usageMetadata || response?.response?.usageMetadata || {};
+    return {
+        promptTokens: usage.promptTokenCount ?? null,
+        candidateTokens: usage.candidatesTokenCount ?? null,
+        thoughtTokens: usage.thoughtsTokenCount ?? null,
+    };
+}
+
+function calculateFlexibleOutputTokens(contents, maxTokenFailureCount = 0, options = {}) {
+    const minOutputTokens = Math.max(
+        1,
+        Number(options.minOutputTokens) || DEFAULT_LEIAUT_MIN_OUTPUT_TOKENS
+    );
+    const maxOutputTokens = Math.max(
+        minOutputTokens,
+        Number(options.maxOutputTokens) || DEFAULT_LEIAUT_MAX_OUTPUT_TOKENS
+    );
+    const outputTokenMultiplier = Math.max(
+        1,
+        Number(options.outputTokenMultiplier) || DEFAULT_LEIAUT_OUTPUT_TOKEN_MULTIPLIER
+    );
+    const retryMultiplier = Math.max(
+        1,
+        Number(options.outputTokenRetryMultiplier)
+            || DEFAULT_LEIAUT_OUTPUT_TOKEN_RETRY_MULTIPLIER
+    );
+    const maxRetryMultiplier = Math.max(
+        retryMultiplier,
+        Number(options.maxOutputTokenRetryMultiplier)
+            || DEFAULT_LEIAUT_MAX_OUTPUT_TOKEN_RETRY_MULTIPLIER
+    );
+    const baseBudget = Math.max(
+        minOutputTokens,
+        Math.ceil(estimateTokens(String(contents || '')) * outputTokenMultiplier)
+    );
+    const retryGrowth = Math.min(
+        maxRetryMultiplier,
+        retryMultiplier ** Math.max(0, maxTokenFailureCount)
+    );
+
+    return Math.min(maxOutputTokens, Math.ceil(baseBudget * retryGrowth));
+}
+
+function getHeaderValue(headers, name) {
+    if (!headers) return null;
+    if (typeof headers.get === 'function') return headers.get(name);
+
+    const matchingKey = Object.keys(headers).find(key => key.toLowerCase() === name.toLowerCase());
+    return matchingKey ? headers[matchingKey] : null;
+}
+
+function getRetryAfterMs(error, nowMs = Date.now()) {
+    const headerSources = [
+        error?.headers,
+        error?.response?.headers,
+        error?.sdkHttpResponse?.headers,
+        error?.cause?.headers,
+        error?.cause?.response?.headers,
+    ];
+    const rawValue = headerSources
+        .map(headers => getHeaderValue(headers, 'retry-after'))
+        .find(value => value !== null && value !== undefined && String(value).trim());
+    if (rawValue === undefined || rawValue === null) return 0;
+
+    const value = String(rawValue).trim();
+    const seconds = Number(value);
+    if (Number.isFinite(seconds) && seconds >= 0) return Math.ceil(seconds * 1000);
+
+    const retryAt = Date.parse(value);
+    return Number.isFinite(retryAt) ? Math.max(0, retryAt - nowMs) : 0;
+}
+
+function calculateRetryDelayMs(retryNumber, options = {}) {
+    const baseDelayMs = Math.max(1, Number(options.baseDelayMs) || DEFAULT_LEIAUT_RETRY_BASE_DELAY_MS);
+    const maxDelayMs = Math.max(baseDelayMs, Number(options.maxDelayMs) || DEFAULT_LEIAUT_RETRY_MAX_DELAY_MS);
+    const randomValue = Math.min(1, Math.max(0, Number(options.randomValue ?? Math.random())));
+    const exponentialDelay = Math.min(maxDelayMs, baseDelayMs * (2 ** Math.max(0, retryNumber - 1)));
+    const jitteredDelay = Math.min(maxDelayMs, Math.round(exponentialDelay * (0.8 + (randomValue * 0.4))));
+    return Math.max(jitteredDelay, Math.max(0, Number(options.retryAfterMs) || 0));
+}
+
+function waitMilliseconds(milliseconds) {
+    return new Promise(resolve => setTimeout(resolve, Math.max(0, milliseconds)));
+}
+
+async function waitForVertexCooldown(cooldownMs, label) {
+    const remainingMs = Math.max(0, lastVertexRequestFinishedAt + cooldownMs - Date.now());
+    if (remainingMs === 0) return;
+    console.log(`⏳ Aguardando ${Math.ceil(remainingMs / 1000)}s antes de enviar ${label}, para suavizar o lote.`);
+    await waitMilliseconds(remainingMs);
+}
+
+async function generateStructuredContent(modelName, contents, timeoutMs, label, retryOptions = {}) {
+    const ai = getVertexAIClient();
+    const maxTransientRetries = Math.min(
+        MAX_LEIAUT_RETRIES,
+        Math.max(0, Number(retryOptions.maxRetries) || 0)
+    );
+    const maxTokenRetries = Math.min(
+        MAX_LEIAUT_TOKEN_RETRIES,
+        Math.max(0, Number(retryOptions.maxTokenRetries) || 0)
+    );
+    const cooldownMs = Math.max(0, Number(retryOptions.requestCooldownMs) || 0);
+    const maxAttempts = 1 + maxTransientRetries + maxTokenRetries;
+    let transientFailureCount = 0;
+    let maxTokenFailureCount = 0;
+
+    await waitForVertexCooldown(cooldownMs, label);
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      const abortController = new AbortController();
+      const timeoutId = setTimeout(() => abortController.abort(), timeoutMs);
+
+      try {
+        const maxOutputTokens = calculateFlexibleOutputTokens(
+          contents,
+          maxTokenFailureCount,
+          retryOptions
+        );
+        console.log(
+          `🤖 Enviando ${label} ao Gemini (${modelName}) — tentativa `
+          + `${attempt}/${maxAttempts}, orçamento ${maxOutputTokens.toLocaleString('pt-BR')} tokens...`
+        );
+        const response = await ai.models.generateContent({
+          model: modelName,
+          contents,
+          config: {
+            systemInstruction: systemInstruction,
+            responseMimeType: "application/json",
+            responseSchema: responseSchema,
+            temperature: 0.2,
+            maxOutputTokens,
+            thinkingConfig: {
+              thinkingBudget: Math.max(0, Number(retryOptions.thinkingBudget) || 0),
+              includeThoughts: false
+            },
+            httpOptions: {
+              timeout: timeoutMs,
+              // O LEIAUT controla e registra os retries para evitar tentativas ocultas em cascata.
+              retryOptions: { attempts: 1 }
+            },
+            abortSignal: abortController.signal
+          }
+        });
+
+        if (getVertexFinishReason(response) === 'MAX_TOKENS') {
+          const tokenUsage = getVertexTokenUsage(response);
+          const truncationError = new Error(
+            `Resposta truncada por MAX_TOKENS em ${label} com orçamento de `
+            + `${maxOutputTokens} tokens.`
+          );
+          truncationError.code = 'LEIAUT_MAX_TOKENS';
+          truncationError.maxOutputTokens = maxOutputTokens;
+          truncationError.tokenUsage = tokenUsage;
+          throw truncationError;
+        }
+
+        return response;
+      } catch (error) {
+        if (error?.code === 'LEIAUT_MAX_TOKENS') {
+          maxTokenFailureCount += 1;
+        } else if (isRetryableVertexError(error)) {
+          transientFailureCount += 1;
+        }
+        const shouldRetry = shouldRetryVertexFailure(error, {
+          transientFailureCount,
+          maxTransientRetries,
+          maxTokenFailureCount,
+          maxTokenRetries,
+        });
+        if (!shouldRetry) {
+          if (error?.code === 'LEIAUT_MAX_TOKENS') {
+            const exhaustedError = new Error(
+              `Resposta truncada por MAX_TOKENS após ${attempt} tentativa(s) em ${label}. `
+              + `Orçamento final: ${error.maxOutputTokens} tokens; nenhum JSON parcial foi aceito.`
+            );
+            exhaustedError.code = 'LEIAUT_MAX_TOKENS';
+            exhaustedError.attempts = attempt;
+            exhaustedError.tokenUsage = error.tokenUsage;
+            exhaustedError.cause = error;
+            throw exhaustedError;
+          }
+          if (isRetryableVertexError(error) && attempt > 1) {
+            const exhaustedError = new Error(
+              `Falha transitória da Vertex AI após ${attempt} tentativas em ${label}. `
+              + `Último erro: ${error?.message || String(error)}`
+            );
+            exhaustedError.code = 'LEIAUT_VERTEX_RETRIES_EXHAUSTED';
+            exhaustedError.status = getVertexErrorStatus(error);
+            exhaustedError.attempts = attempt;
+            exhaustedError.cause = error;
+            throw exhaustedError;
+          }
+          throw error;
+        }
+
+        const retryNumber = error?.code === 'LEIAUT_MAX_TOKENS'
+          ? maxTokenFailureCount
+          : transientFailureCount;
+        const delayMs = calculateRetryDelayMs(retryNumber, {
+          baseDelayMs: retryOptions.retryBaseDelayMs,
+          maxDelayMs: retryOptions.retryMaxDelayMs,
+          retryAfterMs: getRetryAfterMs(error)
+        });
+        console.warn(
+          `⚠️ Vertex AI retornou ${error?.code === 'LEIAUT_MAX_TOKENS' ? 'MAX_TOKENS' : getVertexErrorStatus(error)} em ${label}. `
+          + `${error?.tokenUsage?.candidateTokens != null
+            ? `Uso informado: ${error.tokenUsage.candidateTokens.toLocaleString('pt-BR')} tokens de candidato`
+                + `${error.tokenUsage.thoughtTokens != null
+                  ? ` e ${error.tokenUsage.thoughtTokens.toLocaleString('pt-BR')} de raciocínio`
+                  : ''}. `
+            : ''}`
+          + `Nova tentativa ${attempt + 1}/${maxAttempts} em ${(delayMs / 1000).toFixed(1)}s.`
+        );
+        await waitMilliseconds(delayMs);
+      } finally {
+        clearTimeout(timeoutId);
+        lastVertexRequestFinishedAt = Date.now();
+      }
+    }
+
+    throw new Error(`Falha inesperada ao processar ${label}.`);
 }
 
 function normalizeMarkdownTransportNewlines(value) {
@@ -589,7 +1049,7 @@ function parseModelJsonResponse(response, label) {
 }
 
 function buildLeiautBlockPrompt(block, context) {
-    const outline = context.outline || '(sem cabeçalhos de nível 1 a 3)';
+    const outline = getMarkdownOutline(block) || '(sem cabeçalhos de nível 1 a 3)';
     const expectedSectionTitles = getLevelTwoHeadingTitles(block);
 
     return `Metadados do arquivo completo:
@@ -598,7 +1058,7 @@ Título canônico: ${context.topicTitle}
 Disciplina inferida: ${context.discipline}
 topic_id canônico: ${context.topicId}
 
-Estrutura global de cabeçalhos (somente para continuidade, sem criar conteúdo ausente):
+Estrutura de cabeçalhos deste bloco (sem criar conteúdo ausente):
 ${outline}
 
 Este é o bloco ${context.blockIndex} de ${context.totalBlocks} do mesmo arquivo.
@@ -642,26 +1102,40 @@ function mergeLeiautBlockData(blockData, context) {
 async function generateLeiautData(markdownContent, inputPath, options) {
     const sourceBlocks = options.forceSingle
         ? [markdownContent]
-        : splitContentIntoBlocks(markdownContent, options.blockInputTokens);
+        : splitContentIntoBlocks(markdownContent, options.blockInputTokens, {
+            maxStructuralUnitTokens: options.maxSectionTokens
+        });
     const context = {
         fileName: path.basename(inputPath),
-        topicTitle: getFirstHeadingTitle(markdownContent, titleFromFileName(inputPath)),
-        discipline: inferDiscipline(markdownContent, inputPath),
-        outline: getMarkdownOutline(markdownContent)
+        topicTitle: getCanonicalTopicTitle(markdownContent, titleFromFileName(inputPath)),
+        discipline: inferDiscipline(markdownContent, inputPath)
     };
     context.topicId = slugify(context.topicTitle, 'topico-indefinido');
 
     if (sourceBlocks.length === 1) {
+        const label = 'arquivo completo';
         const response = await generateStructuredContent(
             options.modelName,
-            `Metadado do arquivo:\nNome original: ${context.fileName}\n\nTransforme o seguinte conteúdo em um arquivo estruturado de estudo:\n\n${markdownContent}`,
+            buildLeiautBlockPrompt(markdownContent, {
+                ...context,
+                blockIndex: 1,
+                totalBlocks: 1
+            }),
             options.timeoutMs,
-            'arquivo completo'
+            label,
+            options
         );
-        return parseModelJsonResponse(response, 'arquivo completo');
+        const parsedFile = parseModelJsonResponse(response, label);
+        canonicalizeSectionTitlesFromSource(parsedFile, markdownContent);
+        assertSectionStructureMatchesSource(parsedFile, markdownContent);
+        return parsedFile;
     }
 
-    console.log(`📦 Processamento fracionado: ${sourceBlocks.length} blocos de até ~${options.blockInputTokens.toLocaleString('pt-BR')} tokens.`);
+    console.log(
+        `📦 Processamento fracionado: ${sourceBlocks.length} blocos; `
+        + `alvo de ~${options.blockInputTokens.toLocaleString('pt-BR')} tokens `
+        + `e teto de ~${options.maxSectionTokens.toLocaleString('pt-BR')} para seção ## indivisível.`
+    );
     const blockData = [];
 
     for (let index = 0; index < sourceBlocks.length; index += 1) {
@@ -675,9 +1149,13 @@ async function generateLeiautData(markdownContent, inputPath, options) {
                 totalBlocks: sourceBlocks.length
             }),
             options.timeoutMs,
-            label
+            label,
+            options
         );
-        blockData.push(parseModelJsonResponse(response, label));
+        const parsedBlock = parseModelJsonResponse(response, label);
+        canonicalizeSectionTitlesFromSource(parsedBlock, sourceBlocks[index]);
+        assertSectionStructureMatchesSource(parsedBlock, sourceBlocks[index]);
+        blockData.push(parsedBlock);
     }
 
     console.log(`✅ ${sourceBlocks.length} blocos processados; consolidando o JSON em memória.`);
@@ -802,6 +1280,7 @@ Regras de Transformação:
    - Cabeçalhos ###, #### e inferiores são subtópicos da seção ## pai e devem permanecer dentro de 'content_markdown'. NUNCA os promova a novas seções JSON.
    - Não crie seção para linha de tabela, parágrafo isolado, recurso Mermaid, resumo genérico ou continuação de bloco.
    - Se a fonte não contiver ##, produza somente a menor quantidade de seções necessária, sem seções genéricas ou sem conteúdo.
+   - Toda seção retornada deve transportar conteúdo da fonte em 'content_markdown' ou em pelo menos um recurso didático; nunca retorne uma seção totalmente vazia.
    - Títulos usam capitalização editorial: primeira palavra descritiva iniciada em maiúscula e demais palavras em minúsculas. Preserve siglas e abreviações canônicas, como CIDE, ICMS, ISS, NBC TA, TI, RT e FRF.
    - Corrija erros ortográficos evidentes nos títulos. Use "doutrina"; nunca "doutina".
 4. Linguagem Didática: Reescreva o conteúdo mantendo o rigor, mas com estilo claro e direto em Markdown.
@@ -1657,7 +2136,11 @@ function validateAndNormalizeOutput(data, sourceFilePath = '') {
     }
 
     console.log("\n⚙️ Iniciando validação e normalização pós-processamento...");
-    const titleContext = getStudyContentContext(data);
+    const originalDocumentTitle = getOriginalDocumentTitleFromFile(sourceFilePath);
+    const titleContext = getStudyContentContext({
+        ...data,
+        topic_title: originalDocumentTitle ?? data.topic_title,
+    });
     normalizeKnownTyposDeep(data);
 
     // 1. Validar e normalizar topic_id
@@ -1701,7 +2184,9 @@ function validateAndNormalizeOutput(data, sourceFilePath = '') {
     }
 
     // 3. Validar topic_title
-    if (!data.topic_title) {
+    if (originalDocumentTitle) {
+        data.topic_title = originalDocumentTitle;
+    } else if (!data.topic_title) {
         console.warn("⚠️ Campo 'topic_title' ausente ou vazio.");
         data.topic_title = "Título Indefinido";
     } else {
@@ -1858,25 +2343,24 @@ function validateAndNormalizeOutput(data, sourceFilePath = '') {
     return data;
 }
 
-async function processarResumo() {
-  try {
-    const args = parseLeiautArgs(process.argv.slice(2));
-    const inputFile = args.inputFile;
-    const inputPath = path.isAbsolute(inputFile) ? inputFile : path.join(process.cwd(), inputFile);
-
-    if (!fs.existsSync(inputPath)) {
-      console.error(`❌ Erro: Arquivo de entrada não encontrado: ${inputPath}`);
-      return;
-    }
-
+async function processMarkdownFile(inputPath, args, outputBaseDir = process.cwd()) {
     console.log(`📖 Lendo arquivo: ${path.basename(inputPath)}...`);
     const rawMarkdownContent = fs.readFileSync(inputPath, 'utf-8');
-    const markdownContent = normalizeInlineTopicMarkers(rawMarkdownContent);
-    if (markdownContent !== rawMarkdownContent) {
+    const normalizedMarkdownContent = normalizeInlineTopicMarkers(rawMarkdownContent);
+    const markdownContent = removePygemRecoveryMarkers(normalizedMarkdownContent);
+    if (normalizedMarkdownContent !== rawMarkdownContent) {
       const normalizedMarkers = (rawMarkdownContent.match(/^@@@[ \t]+##(?!#)[ \t]+\S.*$/gm) || []).length;
       console.warn(
         `⚠️  ${normalizedMarkers} marcador(es) de tópico no formato "@@@ ##" `
         + 'foram normalizados em memória para linhas separadas.'
+      );
+    }
+    if (markdownContent !== normalizedMarkdownContent) {
+      const removedMarkers = normalizedMarkdownContent.split(/\r?\n/).length
+        - markdownContent.split(/\r?\n/).length;
+      console.warn(
+        `⚠️  ${removedMarkers} marcador(es) técnico(s) exato(s) "Recuperação de bloco" `
+        + 'foram ignorados em memória; o conteúdo ao redor foi preservado.'
       );
     }
     const inputValidation = validateMarkdownInput(markdownContent);
@@ -1893,7 +2377,71 @@ async function processarResumo() {
     const maxInputTokens = getPositiveIntegerEnv('LEIAUT_MAX_INPUT_TOKENS', DEFAULT_LEIAUT_MAX_INPUT_TOKENS);
     const configuredBlockTokens = getPositiveIntegerEnv('LEIAUT_BLOCK_INPUT_TOKENS', DEFAULT_LEIAUT_BLOCK_INPUT_TOKENS);
     const blockInputTokens = Math.min(configuredBlockTokens, maxInputTokens);
+    const configuredMaxSectionTokens = getPositiveIntegerEnv(
+      'LEIAUT_MAX_SECTION_TOKENS',
+      DEFAULT_LEIAUT_MAX_SECTION_TOKENS
+    );
+    const maxSectionTokens = Math.max(
+      blockInputTokens,
+      Math.min(configuredMaxSectionTokens, maxInputTokens)
+    );
     const timeoutMs = getPositiveIntegerEnv('LEIAUT_TIMEOUT_MS', DEFAULT_LEIAUT_TIMEOUT_MS);
+    const maxRetries = Math.min(
+      MAX_LEIAUT_RETRIES,
+      getNonNegativeIntegerEnv('LEIAUT_MAX_RETRIES', DEFAULT_LEIAUT_MAX_RETRIES)
+    );
+    const maxTokenRetries = Math.min(
+      MAX_LEIAUT_TOKEN_RETRIES,
+      getNonNegativeIntegerEnv(
+        'LEIAUT_MAX_TOKEN_RETRIES',
+        DEFAULT_LEIAUT_MAX_TOKEN_RETRIES
+      )
+    );
+    const retryBaseDelayMs = getPositiveIntegerEnv(
+      'LEIAUT_RETRY_BASE_DELAY_MS',
+      DEFAULT_LEIAUT_RETRY_BASE_DELAY_MS
+    );
+    const retryMaxDelayMs = Math.max(
+      retryBaseDelayMs,
+      getPositiveIntegerEnv('LEIAUT_RETRY_MAX_DELAY_MS', DEFAULT_LEIAUT_RETRY_MAX_DELAY_MS)
+    );
+    const requestCooldownMs = getNonNegativeIntegerEnv(
+      'LEIAUT_REQUEST_COOLDOWN_MS',
+      DEFAULT_LEIAUT_REQUEST_COOLDOWN_MS
+    );
+    const minOutputTokens = Math.min(
+      DEFAULT_LEIAUT_MAX_OUTPUT_TOKENS,
+      getPositiveIntegerEnv(
+        'LEIAUT_MIN_OUTPUT_TOKENS',
+        DEFAULT_LEIAUT_MIN_OUTPUT_TOKENS
+      )
+    );
+    const maxOutputTokens = Math.min(
+      DEFAULT_LEIAUT_MAX_OUTPUT_TOKENS,
+      Math.max(
+        minOutputTokens,
+        getPositiveIntegerEnv('LEIAUT_MAX_OUTPUT_TOKENS', DEFAULT_LEIAUT_MAX_OUTPUT_TOKENS)
+      )
+    );
+    const outputTokenMultiplier = getPositiveIntegerEnv(
+      'LEIAUT_OUTPUT_TOKEN_MULTIPLIER',
+      DEFAULT_LEIAUT_OUTPUT_TOKEN_MULTIPLIER
+    );
+    const outputTokenRetryMultiplier = getPositiveIntegerEnv(
+      'LEIAUT_OUTPUT_TOKEN_RETRY_MULTIPLIER',
+      DEFAULT_LEIAUT_OUTPUT_TOKEN_RETRY_MULTIPLIER
+    );
+    const maxOutputTokenRetryMultiplier = Math.max(
+      outputTokenRetryMultiplier,
+      getPositiveIntegerEnv(
+        'LEIAUT_MAX_OUTPUT_TOKEN_RETRY_MULTIPLIER',
+        DEFAULT_LEIAUT_MAX_OUTPUT_TOKEN_RETRY_MULTIPLIER
+      )
+    );
+    const thinkingBudget = getNonNegativeIntegerEnv(
+      'LEIAUT_THINKING_BUDGET',
+      DEFAULT_LEIAUT_THINKING_BUDGET
+    );
 
     console.log(`📊 Tamanho: ${markdownContent.length.toLocaleString('pt-BR')} caracteres, ~${estimatedInputTokens.toLocaleString('pt-BR')} tokens, ${headingCount.toLocaleString('pt-BR')} cabeçalhos.`);
 
@@ -1903,7 +2451,7 @@ async function processarResumo() {
         splitByTopic: args.splitByTopic
       });
       outputs.forEach(output => validateAndNormalizeOutput(output.data, inputPath));
-      const outputPaths = saveDeterministicOutputs(outputs, inputPath, args.dryRun);
+      const outputPaths = saveDeterministicOutputs(outputs, inputPath, args.dryRun, outputBaseDir);
       const totalSections = outputs.reduce((sum, output) => sum + output.data.sections.length, 0);
 
       if (args.dryRun) {
@@ -1913,7 +2461,7 @@ async function processarResumo() {
       }
 
       printOutputPaths(outputPaths);
-      return;
+      return outputPaths;
     }
 
     if (args.forceLarge && estimatedInputTokens > maxInputTokens) {
@@ -1926,22 +2474,46 @@ async function processarResumo() {
     console.log(`☁️ Projeto: ${vertexConfig.project} | Região: ${vertexConfig.location} | API: ${vertexConfig.apiVersion}`);
     console.log(`🔐 Autenticação: ${vertexConfig.credentialsSource}. API Key não é utilizada.`);
     console.log(`⏱️ Timeout da chamada: ${Math.round(timeoutMs / 1000)}s. Se exceder, o processo será interrompido com erro claro.`);
+    console.log(
+      `🔁 Resiliência: até ${maxRetries} retry(ies) transitório(s) e `
+      + `${maxTokenRetries} retry(ies) por MAX_TOKENS, `
+      + `backoff base ${(retryBaseDelayMs / 1000).toFixed(1)}s e cooldown ${(requestCooldownMs / 1000).toFixed(1)}s.`
+    );
+    console.log(
+      `🔢 Orçamento de saída: ${minOutputTokens.toLocaleString('pt-BR')}–`
+      + `${maxOutputTokens.toLocaleString('pt-BR')} tokens; crescimento `
+      + `${outputTokenRetryMultiplier}× após MAX_TOKENS; thinking budget ${thinkingBudget}.`
+    );
 
     let data = await generateLeiautData(markdownContent, inputPath, {
       modelName,
       timeoutMs,
       blockInputTokens,
-      forceSingle: args.forceLarge
+      maxSectionTokens,
+      forceSingle: args.forceLarge,
+      maxRetries,
+      maxTokenRetries,
+      retryBaseDelayMs,
+      retryMaxDelayMs,
+      requestCooldownMs,
+      minOutputTokens,
+      maxOutputTokens,
+      outputTokenMultiplier,
+      outputTokenRetryMultiplier,
+      maxOutputTokenRetryMultiplier,
+      thinkingBudget
     });
 
     // Grava somente depois das normalizações e da validação estrutural contra a fonte.
     data = validateAndNormalizeOutput(data, inputPath);
+    canonicalizeSectionTitlesFromSource(data, markdownContent);
+    recoverEmptySectionsFromSource(data, markdownContent);
     assertSectionStructureMatchesSource(data, markdownContent);
     cleanMermaidInSections(data, false);
     assertImportableSections(data);
 
     const outputFileName = `${path.parse(inputPath).name}_processado.json`;
-    const outputPath = path.join(process.cwd(), outputFileName);
+    const outputPath = path.join(outputBaseDir, outputFileName);
     fs.writeFileSync(outputPath, JSON.stringify(data, null, 2), 'utf-8');
 
     console.log("\n✅ JSON gerado, normalizado quanto ao transporte e Mermaid, e salvo antes do diagnóstico pós-processamento.");
@@ -1962,21 +2534,113 @@ async function processarResumo() {
 
     console.log("✅ Processamento concluído.");
 
-  } catch (error) {
+    return [outputPath];
+}
+
+function reportPipelineError(error, context = '') {
+    const prefix = context ? `${context}: ` : '';
+
     if (error?.name === 'VertexAIConfigurationError') {
-      console.error(`❌ Configuração do Vertex AI inválida: ${error.message}`);
+      console.error(`❌ ${prefix}Configuração do Vertex AI inválida: ${error.message}`);
       console.error('   Configure GOOGLE_CLOUD_PROJECT e autentique por ADC ou GOOGLE_APPLICATION_CREDENTIALS.');
-      process.exitCode = 1;
       return;
     }
     if (error?.name === 'AbortError' || /abort|timeout|timed out/i.test(error?.message || '')) {
-      console.error("❌ A chamada ao Gemini excedeu o tempo limite configurado.");
+      console.error(`❌ ${prefix}A chamada ao Gemini excedeu o tempo limite configurado.`);
       console.error("   Ajuste LEIAUT_TIMEOUT_MS se o arquivo for pequeno e a rede estiver lenta.");
       console.error("   Para arquivos grandes, divida o Markdown antes de rodar o LEIAUT.");
-      process.exitCode = 1;
       return;
     }
-    console.error("❌ Ocorreu um erro no pipeline LEIAUT:", error);
+    if (error?.code === 'LEIAUT_VERTEX_RETRIES_EXHAUSTED') {
+      console.error(`❌ ${prefix}${error.message}`);
+      console.error('   A saída desta execução não foi gravada. Aguarde a capacidade compartilhada normalizar ou avalie o endpoint global.');
+      return;
+    }
+
+    console.error(`❌ ${prefix}Ocorreu um erro no pipeline LEIAUT:`, error);
+}
+
+async function processMarkdownDirectory(inputPath, inputFiles, args) {
+  const outputBaseDir = path.join(process.cwd(), `${path.basename(inputPath)}_processado`);
+  if (!args.dryRun && !fs.existsSync(outputBaseDir)) {
+    fs.mkdirSync(outputBaseDir, { recursive: true });
+  }
+
+  console.log(`📁 Diretório de entrada: ${inputPath}`);
+  console.log(`📄 Arquivos Markdown encontrados: ${inputFiles.length}`);
+  console.log(`📂 Saída do lote: ${outputBaseDir}`);
+  console.log('ℹ️  Somente arquivos .md diretamente neste diretório serão processados, em ordem numérica.');
+
+  const failures = [];
+  let successCount = 0;
+
+  for (let index = 0; index < inputFiles.length; index++) {
+    const inputFile = inputFiles[index];
+    const fileName = path.basename(inputFile);
+    const attemptStartedAt = Date.now();
+    console.log(`\n${'='.repeat(72)}`);
+    console.log(`📄 Arquivo ${index + 1}/${inputFiles.length}: ${fileName}`);
+
+    try {
+      await processMarkdownFile(inputFile, args, outputBaseDir);
+      successCount++;
+    } catch (error) {
+      const previousOutputPath = path.join(
+        outputBaseDir,
+        `${path.parse(inputFile).name}_processado.json`
+      );
+      const staleOutputPath = fs.existsSync(previousOutputPath)
+        && fs.statSync(previousOutputPath).mtimeMs < attemptStartedAt
+        ? previousOutputPath
+        : null;
+      failures.push({
+        fileName,
+        message: error?.message || String(error),
+        staleOutputPath
+      });
+      reportPipelineError(error, `Falha ao processar ${fileName}`);
+    }
+  }
+
+  console.log(`\n${'='.repeat(72)}`);
+  console.log('📊 RESUMO DO PROCESSAMENTO EM LOTE:');
+  console.log(`✅ Arquivos processados com sucesso: ${successCount}`);
+  console.log(`❌ Arquivos com erro: ${failures.length}`);
+  console.log(`📁 Arquivos de saída: ${outputBaseDir}`);
+
+  if (failures.length > 0) {
+    console.log('\n❌ ERROS ENCONTRADOS:');
+    failures.forEach((failure, index) => {
+      console.log(`  ${index + 1}. ${failure.fileName}: ${failure.message}`);
+      if (failure.staleOutputPath) {
+        console.log(`     ⚠️ Saída antiga preservada (não pertence a esta execução): ${failure.staleOutputPath}`);
+      }
+    });
+    process.exitCode = 1;
+  }
+}
+
+async function processarResumo() {
+  try {
+    const args = parseLeiautArgs(process.argv.slice(2));
+    const inputFile = args.inputFile;
+    const inputPath = path.isAbsolute(inputFile) ? inputFile : path.join(process.cwd(), inputFile);
+
+    if (!fs.existsSync(inputPath)) {
+      const error = new Error(`Caminho de entrada não encontrado: ${inputPath}`);
+      error.code = 'LEIAUT_INPUT_NOT_FOUND';
+      throw error;
+    }
+
+    const resolvedInput = resolveMarkdownInputPaths(inputPath);
+    if (resolvedInput.inputType === 'directory') {
+      await processMarkdownDirectory(inputPath, resolvedInput.files, args);
+      return;
+    }
+
+    await processMarkdownFile(resolvedInput.files[0], args);
+  } catch (error) {
+    reportPipelineError(error);
     process.exitCode = 1;
   }
 }
@@ -1990,10 +2654,13 @@ module.exports = {
     validateAndNormalizeOutput,
     cleanMermaidCode,
     parseLeiautArgs,
+    resolveMarkdownInputPaths,
     countMarkdownHeadings,
     slugify,
     inferDiscipline,
     inferDisciplineFromFileName,
+    extractOriginalDocumentTitle,
+    getCanonicalTopicTitle,
     buildDeterministicOutputs,
     splitByHeadingLevel,
     buildLeiautBlockPrompt,
@@ -2004,12 +2671,23 @@ module.exports = {
     systemInstruction,
     normalizeStudyTitle,
     normalizeInlineTopicMarkers,
+    removePygemRecoveryMarkers,
     removeOrphanMarkdownHeadings,
     validateMarkdownInput,
     assertSectionStructureMatchesSource,
+    canonicalizeSectionTitlesFromSource,
+    recoverEmptySectionsFromSource,
     assertImportableSections,
     getLevelTwoHeadingTitles,
     normalizeMarkdownTransportNewlines,
     normalizeMermaidTransportNewlines,
-    normalizeContentTransportArtifacts
+    normalizeContentTransportArtifacts,
+    getVertexErrorStatus,
+    isRetryableVertexError,
+    shouldRetryVertexFailure,
+    getRetryAfterMs,
+    calculateRetryDelayMs,
+    getVertexFinishReason,
+    getVertexTokenUsage,
+    calculateFlexibleOutputTokens
 };

@@ -8,6 +8,9 @@
  */
 
 require('dotenv').config();
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 const {
   validateAndNormalizeOutput,
   normalizeMarkdownTransportNewlines,
@@ -15,20 +18,35 @@ const {
   normalizeContentTransportArtifacts,
   normalizeStudyTitle,
   normalizeInlineTopicMarkers,
+  removePygemRecoveryMarkers,
   removeOrphanMarkdownHeadings,
   validateMarkdownInput,
   assertSectionStructureMatchesSource,
+  canonicalizeSectionTitlesFromSource,
+  recoverEmptySectionsFromSource,
   assertImportableSections,
   cleanMermaidCode,
   parseLeiautArgs,
+  resolveMarkdownInputPaths,
   slugify,
   inferDiscipline,
   inferDisciplineFromFileName,
+  extractOriginalDocumentTitle,
+  getCanonicalTopicTitle,
+  getLevelTwoHeadingTitles,
   buildDeterministicOutputs,
   buildLeiautBlockPrompt,
   mergeLeiautBlockData,
   collectPostGenerationDiagnostics,
   formatDiagnosticsLog,
+  getVertexErrorStatus,
+  isRetryableVertexError,
+  shouldRetryVertexFailure,
+  getRetryAfterMs,
+  calculateRetryDelayMs,
+  getVertexFinishReason,
+  getVertexTokenUsage,
+  calculateFlexibleOutputTokens,
 } = require('./src/app-leiaut');
 const { splitContentIntoBlocks } = require('./src/services/tokenService');
 
@@ -463,6 +481,27 @@ _log('\n📦 Grupo 9: Parser determinístico sem IA');
   assert(args.noAi, '--split-by-topic implica noAi');
   assert(args.splitByTopic, '--split-by-topic ativado');
 
+  const temporaryInputDir = fs.mkdtempSync(path.join(__dirname, '.tmp-leiaut-input-'));
+  try {
+    fs.writeFileSync(path.join(temporaryInputDir, '010-topico.md'), '# Tópico 10', 'utf-8');
+    fs.writeFileSync(path.join(temporaryInputDir, '002-topico.MD'), '# Tópico 2', 'utf-8');
+    fs.writeFileSync(path.join(temporaryInputDir, 'ignorar.txt'), 'não processar', 'utf-8');
+    fs.mkdirSync(path.join(temporaryInputDir, 'subdiretorio'));
+    fs.writeFileSync(path.join(temporaryInputDir, 'subdiretorio', '001-interno.md'), '# Interno', 'utf-8');
+
+    const resolvedDirectory = resolveMarkdownInputPaths(temporaryInputDir);
+    assertEqual(resolvedDirectory.inputType, 'directory', 'Entrada de diretório é reconhecida');
+    assertEqual(resolvedDirectory.files.length, 2, 'Diretório inclui somente arquivos Markdown diretos');
+    assertEqual(path.basename(resolvedDirectory.files[0]), '002-topico.MD', 'Arquivos do diretório usam ordem numérica');
+    assertEqual(path.basename(resolvedDirectory.files[1]), '010-topico.md', 'Ordenação numérica preserva sequência crescente');
+
+    const resolvedFile = resolveMarkdownInputPaths(resolvedDirectory.files[0]);
+    assertEqual(resolvedFile.inputType, 'file', 'Entrada de arquivo único continua reconhecida');
+    assertEqual(resolvedFile.files[0], resolvedDirectory.files[0], 'Arquivo único mantém o caminho original');
+  } finally {
+    fs.rmSync(temporaryInputDir, { recursive: true, force: true });
+  }
+
   assertEqual(slugify('Balanço Patrimonial: Ativo & Passivo'), 'balanco-patrimonial-ativo-passivo', 'slugify remove acentos e símbolos');
   assertEqual(inferDiscipline('# Contabilidade Geral\n## Balanço Patrimonial', 'x.md'), 'Contabilidade', 'Inferência detecta Contabilidade pelo conteúdo');
   assertEqual(inferDiscipline('# Direito Civil\n## LINDB', 'afo.md'), 'Direito Civil', 'Conteúdo prevalece sobre nome de arquivo ambíguo');
@@ -510,6 +549,89 @@ _log('\n📦 Grupo 9: Parser determinístico sem IA');
   assertEqual(outputs[1].data.sections.length, 3, 'Tópico com preface + dois ### vira três seções');
   assertEqual(outputs[2].data.sections[0].title, 'Segundo Tema', 'Tópico sem ### gera seção única');
 
+  const immutableTitleMarkdown = [
+    '@@@ LEI de Introdução às Normas: LINDB (TÍTULO ORIGINAL)',
+    '## SUBTÍTULO REESCREVÍVEL',
+    'Conteúdo.'
+  ].join('\n');
+  assertEqual(
+    extractOriginalDocumentTitle(immutableTitleMarkdown),
+    'LEI de Introdução às Normas: LINDB (TÍTULO ORIGINAL)',
+    'Extrai literalmente o título original marcado por @@@'
+  );
+  assertEqual(
+    getCanonicalTopicTitle(immutableTitleMarkdown, 'fallback'),
+    'LEI de Introdução às Normas: LINDB (TÍTULO ORIGINAL)',
+    'Título marcado prevalece sobre o primeiro cabeçalho'
+  );
+  const immutableOutputs = buildDeterministicOutputs(
+    immutableTitleMarkdown,
+    'material.md',
+    { splitByTopic: false }
+  );
+  assertEqual(
+    immutableOutputs[0].data.topic_title,
+    'LEI de Introdução às Normas: LINDB (TÍTULO ORIGINAL)',
+    'Modo determinístico não normaliza o título marcado'
+  );
+  assert(
+    immutableOutputs[0].data.sections.some(section => section.title === 'Subtítulo reescrevível'),
+    'Subtítulo continua sujeito à normalização editorial'
+  );
+  assertEqual(
+    extractOriginalDocumentTitle('@@@\n## Seção do sumário\nConteúdo.'),
+    null,
+    'Marcador estrutural isolado não é confundido com título do material'
+  );
+  assertEqual(
+    extractOriginalDocumentTitle('@@ Título ORIGINAL com dois arrobas\n### Subtítulo'),
+    'Título ORIGINAL com dois arrobas',
+    'Marcador de título com dois arrobas também é preservado'
+  );
+  assertEqual(
+    extractOriginalDocumentTitle(
+      '@@ CPC 23 – POLÍTICAS, ESTIMATIVAS CONTÁBEIS E RETIFICAÇÃO DE ERROS\nConteúdo.'
+    ),
+    'CPC 23 – Políticas, estimativas contábeis e retificação de erros',
+    'Título marcado em caixa alta é normalizado para o contrato editorial do site'
+  );
+  assertEqual(
+    getLevelTwoHeadingTitles('## CRITÉRIOS DE AVALIAÇÃO DO PASSIVO\nConteúdo descritivo.')[0],
+    'Critérios de avaliação do passivo',
+    'Cabeçalho em caixa alta não usa a própria linha como contexto de sigla'
+  );
+
+  const titleFixtureDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'leiaut-title-'));
+  const titleFixturePath = path.join(titleFixtureDirectory, 'material.md');
+  try {
+    fs.writeFileSync(titleFixturePath, immutableTitleMarkdown, 'utf8');
+    const normalizedData = makeData({
+      topic_title: 'Título alterado pela IA',
+      sections: [{
+        section_id: 'dir-civil-lindb-sec-01',
+        title: 'SUBTÍTULO REESCREVÍVEL',
+        content_markdown: 'Conteúdo.',
+        callouts: [],
+        mnemonics: [],
+        flashcards: [],
+        mermaid_mindmap: '',
+      }],
+    });
+    validateAndNormalizeOutput(normalizedData, titleFixturePath);
+    assertEqual(
+      normalizedData.topic_title,
+      'LEI de Introdução às Normas: LINDB (TÍTULO ORIGINAL)',
+      'Validação restaura literalmente o título da fonte após resposta da IA'
+    );
+    assertEqual(
+      normalizedData.sections[0].title,
+      'Subtítulo reescrevível',
+      'Validação continua normalizando título de seção'
+    );
+  } finally {
+    fs.rmSync(titleFixtureDirectory, { recursive: true, force: true });
+  }
+
   const blockPrompt = buildLeiautBlockPrompt('## Parte 2\nConteúdo.', {
     fileName: 'curso.md',
     topicTitle: 'Curso',
@@ -521,6 +643,36 @@ _log('\n📦 Grupo 9: Parser determinístico sem IA');
   });
   assert(blockPrompt.includes('bloco 2 de 3'), 'Prompt fracionado identifica posição do bloco');
   assert(blockPrompt.includes('Transforme SOMENTE o conteúdo deste bloco'), 'Prompt impede repetição entre blocos');
+  assert(!blockPrompt.includes('## Parte 1'), 'Prompt fracionado não expõe cabeçalhos de outros blocos');
+  assert(blockPrompt.includes('Estrutura de cabeçalhos deste bloco'), 'Prompt identifica o outline como local ao bloco');
+
+  const singleFilePrompt = buildLeiautBlockPrompt([
+    '## Responsabilidade civil',
+    'Texto.',
+    '## Excludentes de responsabilidade (risco administrativo)',
+    'Texto.',
+    '## Excludentes de responsabilidade',
+    'Texto.',
+    '## Responsabilidade civil na CF/88',
+    'Texto.',
+    '## Ações indenizatórias: prazos prescricionais',
+    'Texto.',
+    '## Direito administrativo',
+    'Texto.',
+  ].join('\n'), {
+    fileName: '007_direito-administrativo_reescrito.md',
+    topicTitle: 'Responsabilidade civil do estado',
+    discipline: 'Direito Administrativo',
+    topicId: 'responsabilidade-civil-do-estado',
+    blockIndex: 1,
+    totalBlocks: 1,
+  });
+  assert(
+    singleFilePrompt.includes('Retorne exatamente 6 seção(ões)')
+      && singleFilePrompt.includes('Ações indenizatórias: prazos prescricionais')
+      && singleFilePrompt.includes('Direito administrativo'),
+    'Prompt de arquivo completo também fixa quantidade, ordem e títulos ## exatos'
+  );
 
   const merged = mergeLeiautBlockData([
     { sections: [makeData().sections[0]] },
@@ -752,6 +904,24 @@ _log('\n📦 Grupo 13: Padrão editorial e estrutural');
     'Marcador PYGEM na mesma linha do título ## é normalizado sem alterar outros marcadores'
   );
 
+  assertEqual(
+    removePygemRecoveryMarkers([
+      '@@@ Poderes e deveres da administração pública',
+      'Texto preservado.',
+      '## Recuperação de bloco',
+      'Mais conteúdo preservado.',
+      '@@@ Recuperacao de bloco',
+      'Parágrafo sobre recuperação de bloco permanece.',
+    ].join('\n')),
+    [
+      '@@@ Poderes e deveres da administração pública',
+      'Texto preservado.',
+      'Mais conteúdo preservado.',
+      'Parágrafo sobre recuperação de bloco permanece.',
+    ].join('\n'),
+    'Somente marcadores técnicos exatos de recuperação são removidos'
+  );
+
   const source = '## PRIMEIRO TEMA\nTexto.\n### Filho\nConteúdo.\n## SEGUNDO TEMA\nTexto.';
   const validStructure = {
     sections: [
@@ -778,6 +948,134 @@ _log('\n📦 Grupo 13: Padrão editorial e estrutural');
   }
   assert(structureRejected, 'Subtítulo ### promovido a seção JSON é rejeitado');
 
+  const qualifiedSource = [
+    '## Proibições ao servidor público (continuação)',
+    'Texto.',
+    '## Apuração de responsabilidade (PAD e sindicância)',
+    'Texto.',
+  ].join('\n');
+  const qualifiedData = {
+    sections: [
+      { title: 'Proibições ao servidor público' },
+      { title: 'Apuração de responsabilidade' },
+    ],
+  };
+  canonicalizeSectionTitlesFromSource(qualifiedData, qualifiedSource);
+  assertEqual(
+    qualifiedData.sections[0].title,
+    'Proibições ao servidor público (continuação)',
+    'Qualificador parentético omitido pela IA é restaurado da fonte'
+  );
+  assert(
+    assertSectionStructureMatchesSource(qualifiedData, qualifiedSource) === qualifiedData,
+    'Estrutura passa após restauração determinística dos qualificadores'
+  );
+
+  const legalCitationSource = [
+    '## Produção de provas',
+    'Texto.',
+    '## Desistência e outros casos de extinção (art. 51 e 52)',
+    'Texto.',
+    '## Preferência',
+    'Texto.',
+  ].join('\n');
+  const legalCitationData = {
+    sections: [
+      { title: 'Produção de provas' },
+      { title: 'Desistência e outros casos de extinção (arts. 51 e 52)' },
+      { title: 'Preferência' },
+    ],
+  };
+  canonicalizeSectionTitlesFromSource(legalCitationData, legalCitationSource);
+  assertEqual(
+    legalCitationData.sections[1].title,
+    'Desistência e outros casos de extinção (art. 51 e 52)',
+    'Variação art./arts. é restaurada literalmente a partir da fonte'
+  );
+  assert(
+    assertSectionStructureMatchesSource(legalCitationData, legalCitationSource) === legalCitationData,
+    'Estrutura passa após normalização controlada da abreviação de artigo'
+  );
+
+  const wrongLegalCitationData = {
+    sections: [
+      { title: 'Produção de provas' },
+      { title: 'Desistência e outros casos de extinção (arts. 51 e 53)' },
+      { title: 'Preferência' },
+    ],
+  };
+  canonicalizeSectionTitlesFromSource(wrongLegalCitationData, legalCitationSource);
+  let wrongLegalCitationRejected = false;
+  try {
+    assertSectionStructureMatchesSource(wrongLegalCitationData, legalCitationSource);
+  } catch (error) {
+    wrongLegalCitationRejected = error.code === 'LEIAUT_SECTION_STRUCTURE_INVALID';
+  }
+  assert(wrongLegalCitationRejected, 'Número de artigo divergente continua sendo rejeitado');
+
+  const incompatibleData = {
+    sections: [
+      { title: 'Tema diferente' },
+      { title: 'Apuração de responsabilidade' },
+    ],
+  };
+  canonicalizeSectionTitlesFromSource(incompatibleData, qualifiedSource);
+  let incompatibleStructureRejected = false;
+  try {
+    assertSectionStructureMatchesSource(incompatibleData, qualifiedSource);
+  } catch (error) {
+    incompatibleStructureRejected = error.code === 'LEIAUT_SECTION_STRUCTURE_INVALID';
+  }
+  assert(incompatibleStructureRejected, 'Título realmente incompatível continua sendo rejeitado');
+
+  const sourceBackedRecovery = {
+    sections: [{
+      title: 'Disposições preliminares',
+      content_markdown: '',
+      callouts: [],
+      mnemonics: [],
+      flashcards: [],
+      mermaid_mindmap: '',
+    }],
+  };
+  recoverEmptySectionsFromSource(sourceBackedRecovery, [
+    '### Disposições preliminares',
+    '',
+    '#### Âmbito de aplicação',
+    '',
+    '> **FLASHCARD**',
+    '>',
+    '> Conteúdo literal da fonte.',
+  ].join('\n'));
+  assert(
+    sourceBackedRecovery.sections[0].content_markdown.includes('Conteúdo literal da fonte.'),
+    'Seção vazia com cabeçalho único recupera somente o corpo Markdown literal da fonte'
+  );
+  assert(
+    assertImportableSections(sourceBackedRecovery) === sourceBackedRecovery,
+    'Seção recuperada da fonte volta a ser importável'
+  );
+
+  const ambiguousRecovery = {
+    sections: [{
+      title: 'Título repetido',
+      content_markdown: '',
+      callouts: [],
+      mnemonics: [],
+      flashcards: [],
+      mermaid_mindmap: '',
+    }],
+  };
+  recoverEmptySectionsFromSource(
+    ambiguousRecovery,
+    '### Título repetido\nPrimeiro.\n### Título repetido\nSegundo.'
+  );
+  assertEqual(
+    ambiguousRecovery.sections[0].content_markdown,
+    '',
+    'Cabeçalho duplicado não é usado para recuperação ambígua'
+  );
+
   const structuralBlocks = splitContentIntoBlocks([
     '## Tema um',
     'Texto de tamanho suficiente.',
@@ -792,6 +1090,24 @@ _log('\n📦 Grupo 13: Padrão editorial e estrutural');
     'Subtítulo ### permanece no mesmo bloco do pai ##'
   );
 
+  const blocksWithPreface = splitContentIntoBlocks([
+    '@@@ Definições',
+    '### Conceito',
+    'Conteúdo introdutório.',
+    '## Primeiro tema',
+    'Texto do primeiro tema.',
+    '## Segundo tema',
+    'Texto do segundo tema.',
+  ].join('\n'), 25, { maxStructuralUnitTokens: 80 });
+  assert(
+    blocksWithPreface[0].includes('@@@ Definições') && blocksWithPreface[0].includes('## Primeiro tema'),
+    'Prefácio é anexado à primeira seção ## em vez de formar bloco sem seção'
+  );
+  assert(
+    blocksWithPreface.every(block => /^##(?!#)\s+\S/m.test(block)),
+    'Arquivo com seções ## não gera bloco fracionado sem seção principal'
+  );
+
   let oversizedSectionRejected = false;
   try {
     splitContentIntoBlocks(`## Tema único\n${'conteúdo '.repeat(100)}`, 10);
@@ -799,6 +1115,143 @@ _log('\n📦 Grupo 13: Padrão editorial e estrutural');
     oversizedSectionRejected = error.code === 'LEIAUT_SECTION_TOO_LARGE';
   }
   assert(oversizedSectionRejected, 'Seção ## maior que o teto não é dividida silenciosamente');
+
+  const isolatedOversizedSection = `## Tema grande\n${'conteúdo '.repeat(20).trim()}`;
+  const isolatedStructuralBlocks = splitContentIntoBlocks(
+    `${isolatedOversizedSection}\n\n## Tema pequeno\nTexto curto.`,
+    20,
+    { maxStructuralUnitTokens: 80 }
+  );
+  assertEqual(isolatedStructuralBlocks.length, 2, 'Seção moderadamente grande é mantida como bloco isolado');
+  assertEqual(
+    isolatedStructuralBlocks[0],
+    isolatedOversizedSection,
+    'Seção isolada não é cortada nem misturada com a seção seguinte'
+  );
+})();
+
+// ── Grupo 14: Resiliência de chamadas Vertex AI ───────────────────
+_log('\n📦 Grupo 14: Resiliência de chamadas Vertex AI');
+(() => {
+  assertEqual(getVertexErrorStatus({ status: 429 }), 429, 'Status numérico 429 é reconhecido');
+  assertEqual(
+    getVertexErrorStatus({ message: '{"error":{"code":429,"status":"RESOURCE_EXHAUSTED"}}' }),
+    429,
+    'Erro RESOURCE_EXHAUSTED serializado é reconhecido'
+  );
+  assert(isRetryableVertexError({ status: 500 }), 'Erro 500 é tratado como transitório');
+  assert(isRetryableVertexError({ status: 503 }), 'Erro 503 é tratado como transitório');
+  assert(!isRetryableVertexError({ status: 400 }), 'Erro 400 não é repetido');
+  assert(!isRetryableVertexError({ name: 'AbortError' }), 'Abort/timeout não é repetido automaticamente');
+  assert(
+    shouldRetryVertexFailure(
+      { code: 'LEIAUT_MAX_TOKENS' },
+      {
+        transientFailureCount: 2,
+        maxTransientRetries: 2,
+        maxTokenFailureCount: 3,
+        maxTokenRetries: 3,
+      }
+    ),
+    'Retry de MAX_TOKENS permanece disponível após esgotar retries transitórios'
+  );
+  assert(
+    !shouldRetryVertexFailure(
+      { status: 503 },
+      {
+        transientFailureCount: 3,
+        maxTransientRetries: 2,
+        maxTokenFailureCount: 0,
+        maxTokenRetries: 3,
+      }
+    ),
+    'Retry transitório respeita seu próprio limite independente'
+  );
+
+  assertEqual(
+    calculateRetryDelayMs(1, {
+      baseDelayMs: 1000,
+      maxDelayMs: 10000,
+      randomValue: 0.5,
+    }),
+    1000,
+    'Primeiro retry usa o atraso-base com jitter neutro'
+  );
+  assertEqual(
+    calculateRetryDelayMs(2, {
+      baseDelayMs: 1000,
+      maxDelayMs: 10000,
+      randomValue: 0.5,
+    }),
+    2000,
+    'Segundo retry aplica backoff exponencial'
+  );
+  assertEqual(
+    calculateRetryDelayMs(1, {
+      baseDelayMs: 1000,
+      maxDelayMs: 10000,
+      retryAfterMs: 5000,
+      randomValue: 0.5,
+    }),
+    5000,
+    'Retry-After maior que o backoff é respeitado'
+  );
+  assertEqual(
+    getRetryAfterMs({ headers: { 'retry-after': '7' } }),
+    7000,
+    'Retry-After em segundos é convertido para milissegundos'
+  );
+  const outputBudgetOptions = {
+    minOutputTokens: 100,
+    maxOutputTokens: 1000,
+    outputTokenMultiplier: 1,
+    outputTokenRetryMultiplier: 2,
+    maxOutputTokenRetryMultiplier: 4,
+  };
+  assertEqual(
+    calculateFlexibleOutputTokens('trecho curto', 0, outputBudgetOptions),
+    100,
+    'Orçamento de saída respeita o piso configurado'
+  );
+  assertEqual(
+    calculateFlexibleOutputTokens('trecho curto', 1, outputBudgetOptions),
+    200,
+    'Primeiro MAX_TOKENS duplica o orçamento-base'
+  );
+  assertEqual(
+    calculateFlexibleOutputTokens('trecho curto', 2, outputBudgetOptions),
+    400,
+    'Segundo MAX_TOKENS amplia novamente sem ignorar o piso'
+  );
+  assertEqual(
+    calculateFlexibleOutputTokens('trecho curto', 3, {
+      ...outputBudgetOptions,
+      maxOutputTokenRetryMultiplier: 8,
+    }),
+    800,
+    'Terceiro MAX_TOKENS permite crescimento controlado até 8 vezes'
+  );
+  assertEqual(
+    calculateFlexibleOutputTokens('conteúdo '.repeat(2000), 2, outputBudgetOptions),
+    1000,
+    'Orçamento flexível nunca ultrapassa o teto configurado'
+  );
+  assertEqual(
+    getVertexFinishReason({ candidates: [{ finishReason: 'MAX_TOKENS' }] }),
+    'MAX_TOKENS',
+    'Motivo MAX_TOKENS é detectado antes do parse do JSON'
+  );
+  assertEqual(
+    getVertexTokenUsage({
+      usageMetadata: {
+        promptTokenCount: 120,
+        candidatesTokenCount: 4096,
+        thoughtsTokenCount: 3000,
+      },
+    }).thoughtTokens,
+    3000,
+    'Uso de raciocínio informado pelo Vertex é preservado para diagnóstico'
+  );
 })();
 
 // ============================================================
