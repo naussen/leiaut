@@ -33,6 +33,7 @@ const {
   inferDisciplineFromFileName,
   extractOriginalDocumentTitle,
   getCanonicalTopicTitle,
+  getLevelTwoHeadingTitles,
   buildDeterministicOutputs,
   buildLeiautBlockPrompt,
   mergeLeiautBlockData,
@@ -40,9 +41,11 @@ const {
   formatDiagnosticsLog,
   getVertexErrorStatus,
   isRetryableVertexError,
+  shouldRetryVertexFailure,
   getRetryAfterMs,
   calculateRetryDelayMs,
   getVertexFinishReason,
+  getVertexTokenUsage,
   calculateFlexibleOutputTokens,
 } = require('./src/app-leiaut');
 const { splitContentIntoBlocks } = require('./src/services/tokenService');
@@ -584,6 +587,18 @@ _log('\n📦 Grupo 9: Parser determinístico sem IA');
     extractOriginalDocumentTitle('@@ Título ORIGINAL com dois arrobas\n### Subtítulo'),
     'Título ORIGINAL com dois arrobas',
     'Marcador de título com dois arrobas também é preservado'
+  );
+  assertEqual(
+    extractOriginalDocumentTitle(
+      '@@ CPC 23 – POLÍTICAS, ESTIMATIVAS CONTÁBEIS E RETIFICAÇÃO DE ERROS\nConteúdo.'
+    ),
+    'CPC 23 – Políticas, estimativas contábeis e retificação de erros',
+    'Título marcado em caixa alta é normalizado para o contrato editorial do site'
+  );
+  assertEqual(
+    getLevelTwoHeadingTitles('## CRITÉRIOS DE AVALIAÇÃO DO PASSIVO\nConteúdo descritivo.')[0],
+    'Critérios de avaliação do passivo',
+    'Cabeçalho em caixa alta não usa a própria linha como contexto de sigla'
   );
 
   const titleFixtureDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'leiaut-title-'));
@@ -1128,6 +1143,30 @@ _log('\n📦 Grupo 14: Resiliência de chamadas Vertex AI');
   assert(isRetryableVertexError({ status: 503 }), 'Erro 503 é tratado como transitório');
   assert(!isRetryableVertexError({ status: 400 }), 'Erro 400 não é repetido');
   assert(!isRetryableVertexError({ name: 'AbortError' }), 'Abort/timeout não é repetido automaticamente');
+  assert(
+    shouldRetryVertexFailure(
+      { code: 'LEIAUT_MAX_TOKENS' },
+      {
+        transientFailureCount: 2,
+        maxTransientRetries: 2,
+        maxTokenFailureCount: 3,
+        maxTokenRetries: 3,
+      }
+    ),
+    'Retry de MAX_TOKENS permanece disponível após esgotar retries transitórios'
+  );
+  assert(
+    !shouldRetryVertexFailure(
+      { status: 503 },
+      {
+        transientFailureCount: 3,
+        maxTransientRetries: 2,
+        maxTokenFailureCount: 0,
+        maxTokenRetries: 3,
+      }
+    ),
+    'Retry transitório respeita seu próprio limite independente'
+  );
 
   assertEqual(
     calculateRetryDelayMs(1, {
@@ -1185,6 +1224,14 @@ _log('\n📦 Grupo 14: Resiliência de chamadas Vertex AI');
     'Segundo MAX_TOKENS amplia novamente sem ignorar o piso'
   );
   assertEqual(
+    calculateFlexibleOutputTokens('trecho curto', 3, {
+      ...outputBudgetOptions,
+      maxOutputTokenRetryMultiplier: 8,
+    }),
+    800,
+    'Terceiro MAX_TOKENS permite crescimento controlado até 8 vezes'
+  );
+  assertEqual(
     calculateFlexibleOutputTokens('conteúdo '.repeat(2000), 2, outputBudgetOptions),
     1000,
     'Orçamento flexível nunca ultrapassa o teto configurado'
@@ -1193,6 +1240,17 @@ _log('\n📦 Grupo 14: Resiliência de chamadas Vertex AI');
     getVertexFinishReason({ candidates: [{ finishReason: 'MAX_TOKENS' }] }),
     'MAX_TOKENS',
     'Motivo MAX_TOKENS é detectado antes do parse do JSON'
+  );
+  assertEqual(
+    getVertexTokenUsage({
+      usageMetadata: {
+        promptTokenCount: 120,
+        candidatesTokenCount: 4096,
+        thoughtsTokenCount: 3000,
+      },
+    }).thoughtTokens,
+    3000,
+    'Uso de raciocínio informado pelo Vertex é preservado para diagnóstico'
   );
 })();
 

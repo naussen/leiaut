@@ -29,6 +29,7 @@ const DEFAULT_LEIAUT_BLOCK_INPUT_TOKENS = 5000;
 const DEFAULT_LEIAUT_MAX_SECTION_TOKENS = 10000;
 const DEFAULT_LEIAUT_TIMEOUT_MS = 180000;
 const DEFAULT_LEIAUT_MAX_RETRIES = 2;
+const DEFAULT_LEIAUT_MAX_TOKEN_RETRIES = 3;
 const DEFAULT_LEIAUT_RETRY_BASE_DELAY_MS = 10000;
 const DEFAULT_LEIAUT_RETRY_MAX_DELAY_MS = 60000;
 const DEFAULT_LEIAUT_REQUEST_COOLDOWN_MS = 2000;
@@ -36,8 +37,10 @@ const DEFAULT_LEIAUT_MIN_OUTPUT_TOKENS = 4096;
 const DEFAULT_LEIAUT_MAX_OUTPUT_TOKENS = 65536;
 const DEFAULT_LEIAUT_OUTPUT_TOKEN_MULTIPLIER = 2;
 const DEFAULT_LEIAUT_OUTPUT_TOKEN_RETRY_MULTIPLIER = 2;
-const DEFAULT_LEIAUT_MAX_OUTPUT_TOKEN_RETRY_MULTIPLIER = 4;
+const DEFAULT_LEIAUT_MAX_OUTPUT_TOKEN_RETRY_MULTIPLIER = 8;
+const DEFAULT_LEIAUT_THINKING_BUDGET = 0;
 const MAX_LEIAUT_RETRIES = 2;
+const MAX_LEIAUT_TOKEN_RETRIES = 3;
 const RETRYABLE_VERTEX_STATUSES = new Set([429, 500, 503]);
 const MAX_MARKDOWN_LINE_LENGTH = 20000;
 const MAX_HORIZONTAL_WHITESPACE_RUN = 1000;
@@ -231,11 +234,12 @@ function removeOrphanMarkdownHeadings(markdown) {
 }
 
 function getLevelTwoHeadingTitles(markdown) {
+    const titleContext = getTitleNormalizationContext(markdown);
     return String(markdown || '')
         .split(/\r?\n/)
         .map(line => line.trim())
         .filter(line => /^##(?!#)\s+\S/.test(line))
-        .map(line => normalizeStudyTitle(stripHeadingSyntax(line), markdown));
+        .map(line => normalizeStudyTitle(stripHeadingSyntax(line), titleContext));
 }
 
 function getStudyContentContext(data) {
@@ -400,6 +404,17 @@ function getMarkdownHeadingSections(markdown) {
     });
 }
 
+function getTitleNormalizationContext(content) {
+    return String(content || '')
+        .split(/\r?\n/)
+        .filter(line => {
+            const trimmed = line.trim();
+            return !/^@@@?[ \t]+(?!#)/.test(trimmed)
+                && !/^#{1,6}\s+\S/.test(trimmed);
+        })
+        .join('\n');
+}
+
 function recoverEmptySectionsFromSource(data, markdown) {
     if (!Array.isArray(data?.sections)) return data;
 
@@ -520,19 +535,24 @@ function inferDiscipline(content, filePath = '') {
 
 function getFirstHeadingTitle(content, fallbackTitle) {
     const firstHeading = String(content || '').split('\n').find(line => /^#{1,6}\s+\S/.test(line.trim()));
-    return normalizeStudyTitle(firstHeading ? stripHeadingSyntax(firstHeading.trim()) : fallbackTitle, content);
+    return normalizeStudyTitle(
+        firstHeading ? stripHeadingSyntax(firstHeading.trim()) : fallbackTitle,
+        getTitleNormalizationContext(content)
+    );
 }
 
 function extractOriginalDocumentTitle(content) {
-    const firstContentLine = String(content || '')
-        .replace(/^\uFEFF/, '')
-        .split(/\r?\n/)
-        .find(line => line.trim());
+    const normalizedContent = String(content || '').replace(/^\uFEFF/, '');
+    const lines = normalizedContent.split(/\r?\n/);
+    const firstContentIndex = lines.findIndex(line => line.trim());
+    const firstContentLine = firstContentIndex >= 0 ? lines[firstContentIndex] : null;
     const match = firstContentLine?.trim().match(/^@@@?[ \t]+(?!#)(\S.*?)[ \t]*$/);
     if (!match) return null;
 
     const normalizedMarkerTitle = normalizeTitleKey(match[1]);
-    return normalizedMarkerTitle === 'recuperacao de bloco' ? null : match[1];
+    return normalizedMarkerTitle === 'recuperacao de bloco'
+        ? null
+        : normalizeStudyTitle(match[1], getTitleNormalizationContext(normalizedContent));
 }
 
 function getCanonicalTopicTitle(content, fallbackTitle) {
@@ -743,10 +763,27 @@ function isRetryableVertexError(error) {
         || RETRYABLE_VERTEX_STATUSES.has(getVertexErrorStatus(error));
 }
 
+function shouldRetryVertexFailure(error, retryState) {
+    if (error?.code === 'LEIAUT_MAX_TOKENS') {
+        return retryState.maxTokenFailureCount <= retryState.maxTokenRetries;
+    }
+    return isRetryableVertexError(error)
+        && retryState.transientFailureCount <= retryState.maxTransientRetries;
+}
+
 function getVertexFinishReason(response) {
     return response?.candidates?.[0]?.finishReason
         || response?.response?.candidates?.[0]?.finishReason
         || null;
+}
+
+function getVertexTokenUsage(response) {
+    const usage = response?.usageMetadata || response?.response?.usageMetadata || {};
+    return {
+        promptTokens: usage.promptTokenCount ?? null,
+        candidateTokens: usage.candidatesTokenCount ?? null,
+        thoughtTokens: usage.thoughtsTokenCount ?? null,
+    };
 }
 
 function calculateFlexibleOutputTokens(contents, maxTokenFailureCount = 0, options = {}) {
@@ -835,16 +872,22 @@ async function waitForVertexCooldown(cooldownMs, label) {
 
 async function generateStructuredContent(modelName, contents, timeoutMs, label, retryOptions = {}) {
     const ai = getVertexAIClient();
-    const maxRetries = Math.min(
+    const maxTransientRetries = Math.min(
         MAX_LEIAUT_RETRIES,
         Math.max(0, Number(retryOptions.maxRetries) || 0)
     );
+    const maxTokenRetries = Math.min(
+        MAX_LEIAUT_TOKEN_RETRIES,
+        Math.max(0, Number(retryOptions.maxTokenRetries) || 0)
+    );
     const cooldownMs = Math.max(0, Number(retryOptions.requestCooldownMs) || 0);
+    const maxAttempts = 1 + maxTransientRetries + maxTokenRetries;
+    let transientFailureCount = 0;
     let maxTokenFailureCount = 0;
 
     await waitForVertexCooldown(cooldownMs, label);
 
-    for (let attempt = 1; attempt <= maxRetries + 1; attempt += 1) {
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       const abortController = new AbortController();
       const timeoutId = setTimeout(() => abortController.abort(), timeoutMs);
 
@@ -856,7 +899,7 @@ async function generateStructuredContent(modelName, contents, timeoutMs, label, 
         );
         console.log(
           `🤖 Enviando ${label} ao Gemini (${modelName}) — tentativa `
-          + `${attempt}/${maxRetries + 1}, orçamento ${maxOutputTokens.toLocaleString('pt-BR')} tokens...`
+          + `${attempt}/${maxAttempts}, orçamento ${maxOutputTokens.toLocaleString('pt-BR')} tokens...`
         );
         const response = await ai.models.generateContent({
           model: modelName,
@@ -867,6 +910,10 @@ async function generateStructuredContent(modelName, contents, timeoutMs, label, 
             responseSchema: responseSchema,
             temperature: 0.2,
             maxOutputTokens,
+            thinkingConfig: {
+              thinkingBudget: Math.max(0, Number(retryOptions.thinkingBudget) || 0),
+              includeThoughts: false
+            },
             httpOptions: {
               timeout: timeoutMs,
               // O LEIAUT controla e registra os retries para evitar tentativas ocultas em cascata.
@@ -877,12 +924,14 @@ async function generateStructuredContent(modelName, contents, timeoutMs, label, 
         });
 
         if (getVertexFinishReason(response) === 'MAX_TOKENS') {
+          const tokenUsage = getVertexTokenUsage(response);
           const truncationError = new Error(
             `Resposta truncada por MAX_TOKENS em ${label} com orçamento de `
             + `${maxOutputTokens} tokens.`
           );
           truncationError.code = 'LEIAUT_MAX_TOKENS';
           truncationError.maxOutputTokens = maxOutputTokens;
+          truncationError.tokenUsage = tokenUsage;
           throw truncationError;
         }
 
@@ -890,8 +939,15 @@ async function generateStructuredContent(modelName, contents, timeoutMs, label, 
       } catch (error) {
         if (error?.code === 'LEIAUT_MAX_TOKENS') {
           maxTokenFailureCount += 1;
+        } else if (isRetryableVertexError(error)) {
+          transientFailureCount += 1;
         }
-        const shouldRetry = attempt <= maxRetries && isRetryableVertexError(error);
+        const shouldRetry = shouldRetryVertexFailure(error, {
+          transientFailureCount,
+          maxTransientRetries,
+          maxTokenFailureCount,
+          maxTokenRetries,
+        });
         if (!shouldRetry) {
           if (error?.code === 'LEIAUT_MAX_TOKENS') {
             const exhaustedError = new Error(
@@ -900,6 +956,7 @@ async function generateStructuredContent(modelName, contents, timeoutMs, label, 
             );
             exhaustedError.code = 'LEIAUT_MAX_TOKENS';
             exhaustedError.attempts = attempt;
+            exhaustedError.tokenUsage = error.tokenUsage;
             exhaustedError.cause = error;
             throw exhaustedError;
           }
@@ -917,7 +974,9 @@ async function generateStructuredContent(modelName, contents, timeoutMs, label, 
           throw error;
         }
 
-        const retryNumber = attempt;
+        const retryNumber = error?.code === 'LEIAUT_MAX_TOKENS'
+          ? maxTokenFailureCount
+          : transientFailureCount;
         const delayMs = calculateRetryDelayMs(retryNumber, {
           baseDelayMs: retryOptions.retryBaseDelayMs,
           maxDelayMs: retryOptions.retryMaxDelayMs,
@@ -925,7 +984,13 @@ async function generateStructuredContent(modelName, contents, timeoutMs, label, 
         });
         console.warn(
           `⚠️ Vertex AI retornou ${error?.code === 'LEIAUT_MAX_TOKENS' ? 'MAX_TOKENS' : getVertexErrorStatus(error)} em ${label}. `
-          + `Nova tentativa ${attempt + 1}/${maxRetries + 1} em ${(delayMs / 1000).toFixed(1)}s.`
+          + `${error?.tokenUsage?.candidateTokens != null
+            ? `Uso informado: ${error.tokenUsage.candidateTokens.toLocaleString('pt-BR')} tokens de candidato`
+                + `${error.tokenUsage.thoughtTokens != null
+                  ? ` e ${error.tokenUsage.thoughtTokens.toLocaleString('pt-BR')} de raciocínio`
+                  : ''}. `
+            : ''}`
+          + `Nova tentativa ${attempt + 1}/${maxAttempts} em ${(delayMs / 1000).toFixed(1)}s.`
         );
         await waitMilliseconds(delayMs);
       } finally {
@@ -2325,6 +2390,13 @@ async function processMarkdownFile(inputPath, args, outputBaseDir = process.cwd(
       MAX_LEIAUT_RETRIES,
       getNonNegativeIntegerEnv('LEIAUT_MAX_RETRIES', DEFAULT_LEIAUT_MAX_RETRIES)
     );
+    const maxTokenRetries = Math.min(
+      MAX_LEIAUT_TOKEN_RETRIES,
+      getNonNegativeIntegerEnv(
+        'LEIAUT_MAX_TOKEN_RETRIES',
+        DEFAULT_LEIAUT_MAX_TOKEN_RETRIES
+      )
+    );
     const retryBaseDelayMs = getPositiveIntegerEnv(
       'LEIAUT_RETRY_BASE_DELAY_MS',
       DEFAULT_LEIAUT_RETRY_BASE_DELAY_MS
@@ -2366,6 +2438,10 @@ async function processMarkdownFile(inputPath, args, outputBaseDir = process.cwd(
         DEFAULT_LEIAUT_MAX_OUTPUT_TOKEN_RETRY_MULTIPLIER
       )
     );
+    const thinkingBudget = getNonNegativeIntegerEnv(
+      'LEIAUT_THINKING_BUDGET',
+      DEFAULT_LEIAUT_THINKING_BUDGET
+    );
 
     console.log(`📊 Tamanho: ${markdownContent.length.toLocaleString('pt-BR')} caracteres, ~${estimatedInputTokens.toLocaleString('pt-BR')} tokens, ${headingCount.toLocaleString('pt-BR')} cabeçalhos.`);
 
@@ -2399,13 +2475,14 @@ async function processMarkdownFile(inputPath, args, outputBaseDir = process.cwd(
     console.log(`🔐 Autenticação: ${vertexConfig.credentialsSource}. API Key não é utilizada.`);
     console.log(`⏱️ Timeout da chamada: ${Math.round(timeoutMs / 1000)}s. Se exceder, o processo será interrompido com erro claro.`);
     console.log(
-      `🔁 Resiliência: até ${maxRetries} retry(ies) transitório(s), `
+      `🔁 Resiliência: até ${maxRetries} retry(ies) transitório(s) e `
+      + `${maxTokenRetries} retry(ies) por MAX_TOKENS, `
       + `backoff base ${(retryBaseDelayMs / 1000).toFixed(1)}s e cooldown ${(requestCooldownMs / 1000).toFixed(1)}s.`
     );
     console.log(
       `🔢 Orçamento de saída: ${minOutputTokens.toLocaleString('pt-BR')}–`
       + `${maxOutputTokens.toLocaleString('pt-BR')} tokens; crescimento `
-      + `${outputTokenRetryMultiplier}× após MAX_TOKENS.`
+      + `${outputTokenRetryMultiplier}× após MAX_TOKENS; thinking budget ${thinkingBudget}.`
     );
 
     let data = await generateLeiautData(markdownContent, inputPath, {
@@ -2415,6 +2492,7 @@ async function processMarkdownFile(inputPath, args, outputBaseDir = process.cwd(
       maxSectionTokens,
       forceSingle: args.forceLarge,
       maxRetries,
+      maxTokenRetries,
       retryBaseDelayMs,
       retryMaxDelayMs,
       requestCooldownMs,
@@ -2422,7 +2500,8 @@ async function processMarkdownFile(inputPath, args, outputBaseDir = process.cwd(
       maxOutputTokens,
       outputTokenMultiplier,
       outputTokenRetryMultiplier,
-      maxOutputTokenRetryMultiplier
+      maxOutputTokenRetryMultiplier,
+      thinkingBudget
     });
 
     // Grava somente depois das normalizações e da validação estrutural contra a fonte.
@@ -2605,8 +2684,10 @@ module.exports = {
     normalizeContentTransportArtifacts,
     getVertexErrorStatus,
     isRetryableVertexError,
+    shouldRetryVertexFailure,
     getRetryAfterMs,
     calculateRetryDelayMs,
     getVertexFinishReason,
+    getVertexTokenUsage,
     calculateFlexibleOutputTokens
 };

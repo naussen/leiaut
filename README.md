@@ -62,7 +62,7 @@ npm.cmd run leiaut -- caminho\arquivo.md
 
 O arquivo de saída será criado no diretório atual como `arquivo_processado.json`.
 
-Quando a primeira linha útil do Markdown usa `@@ Título` ou `@@@ Título`, esse texto é o título canônico do material e é copiado literalmente para `topic_title`, sem correção ortográfica, capitalização ou reescrita. A regra não se aplica aos cabeçalhos Markdown de subtítulos e seções (`##`, `###` e inferiores), que continuam seguindo a normalização editorial existente. Na ausência do marcador de título, permanece o fallback compatível pelo primeiro cabeçalho ou pelo nome do arquivo.
+Quando a primeira linha útil do Markdown usa `@@ Título` ou `@@@ Título`, esse texto é a fonte canônica de `topic_title` e prevalece sobre a resposta da IA. Títulos já editoriais são preservados; títulos predominantemente em caixa alta são normalizados para o contrato de importação do site, mantendo siglas conhecidas ou confirmadas pelo contexto. A mesma regra vale para cabeçalhos Markdown de subtítulos e seções (`##`, `###` e inferiores). Na ausência do marcador de título, permanece o fallback compatível pelo primeiro cabeçalho ou pelo nome do arquivo.
 
 Também é possível informar um diretório. Nesse modo, o LEIAUT processa sequencialmente
 somente os arquivos `.md` diretamente dentro da pasta, em ordem numérica, e ignora
@@ -138,6 +138,7 @@ Os testes não realizam chamadas de rede nem exigem credenciais.
 | `LEIAUT_MAX_SECTION_TOKENS` | Não | `10000` | Teto de seção `##` indivisível |
 | `LEIAUT_TIMEOUT_MS` | Não | `180000` | Timeout por chamada |
 | `LEIAUT_MAX_RETRIES` | Não | `2` | Novas tentativas transitórias; limitado de `0` a `2` |
+| `LEIAUT_MAX_TOKEN_RETRIES` | Não | `3` | Novas tentativas após `MAX_TOKENS`; limitado de `0` a `3` |
 | `LEIAUT_RETRY_BASE_DELAY_MS` | Não | `10000` | Espera-base do backoff exponencial |
 | `LEIAUT_RETRY_MAX_DELAY_MS` | Não | `60000` | Teto do backoff, salvo `Retry-After` maior |
 | `LEIAUT_REQUEST_COOLDOWN_MS` | Não | `2000` | Intervalo mínimo após uma requisição antes da próxima |
@@ -145,9 +146,10 @@ Os testes não realizam chamadas de rede nem exigem credenciais.
 | `LEIAUT_MAX_OUTPUT_TOKENS` | Não | `65536` | Teto do orçamento de saída, limitado a `65536` |
 | `LEIAUT_OUTPUT_TOKEN_MULTIPLIER` | Não | `2` | Proporção inicial entre tokens do prompt e da resposta |
 | `LEIAUT_OUTPUT_TOKEN_RETRY_MULTIPLIER` | Não | `2` | Crescimento do orçamento após `MAX_TOKENS` |
-| `LEIAUT_MAX_OUTPUT_TOKEN_RETRY_MULTIPLIER` | Não | `4` | Limite acumulado de crescimento nas retentativas |
+| `LEIAUT_MAX_OUTPUT_TOKEN_RETRY_MULTIPLIER` | Não | `8` | Limite acumulado de crescimento nas retentativas |
+| `LEIAUT_THINKING_BUDGET` | Não | `0` | Orçamento de raciocínio; `0` prioriza o JSON final completo |
 
-Respostas encerradas por `MAX_TOKENS` não são interpretadas nem publicadas parcialmente. O LEIAUT aumenta o orçamento somente nas retentativas causadas por truncagem; erros transitórios de capacidade preservam o orçamento calculado.
+Respostas encerradas por `MAX_TOKENS` não são interpretadas nem publicadas parcialmente. O LEIAUT controla separadamente retentativas por truncagem e por indisponibilidade: somente a truncagem aumenta o orçamento. O orçamento de raciocínio fica desativado por padrão porque esta etapa é uma transformação estruturada, não uma tarefa de deliberação aberta.
 
 ## Modelo
 
