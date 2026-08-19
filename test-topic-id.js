@@ -12,6 +12,10 @@ assert.strictEqual(resolveTopicId({
     topicTitle: 'Direito Administrativo',
     fallbackTopicId: 'outro',
 }), 'direito-administrativo');
+assert.strictEqual(
+    assertCanonicalTopicSlug('relatorio-de-auditoria-nbc-ta-700-701-705-e-706'),
+    'relatorio-de-auditoria-nbc-ta-700-701-705-e-706'
+);
 assert.strictEqual(inspectTopicSlug('a-b-c-d', { title: 'Tema' }).suspicious, true);
 assert.throws(() => assertCanonicalTopicSlug('tema--fragmentado'), error => error.code === 'LEIAUT_TOPIC_SLUG_SUSPECT');
 assert.throws(() => assertUniqueTopicIds([

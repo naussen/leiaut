@@ -12,6 +12,7 @@
 - usa `topic_slug` aprovado no manifesto como autoridade do `topic_id`;
 - rejeita slugs fragmentados, ambíguos ou duplicados no lote;
 - expõe mapa explícito para migração `topic_id` antigo → novo, sem alterar banco.
+- ajusta o detector de slug para não tratar conectores editoriais como fragmentação OCR.
 
 ## 2026-08-19
 
