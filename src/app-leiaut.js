@@ -729,7 +729,14 @@ function buildDeterministicOutputs(markdownContent, inputPath, options = {}) {
 }
 
 function writeJsonOutput(outputPath, data) {
-    fs.writeFileSync(outputPath, JSON.stringify(data, null, 2), 'utf-8');
+    fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+    const temporaryPath = `${outputPath}.${process.pid}.${Date.now()}.tmp`;
+    try {
+        fs.writeFileSync(temporaryPath, JSON.stringify(data, null, 2), 'utf-8');
+        fs.renameSync(temporaryPath, outputPath);
+    } finally {
+        if (fs.existsSync(temporaryPath)) fs.unlinkSync(temporaryPath);
+    }
 }
 
 function saveDeterministicOutputs(outputs, inputPath, dryRun = false, outputBaseDir = process.cwd()) {
@@ -2494,15 +2501,29 @@ async function processMarkdownFile(inputPath, args, outputBaseDir = process.cwd(
         splitByTopic: args.splitByTopic
       });
       outputs.forEach(output => validateAndNormalizeOutput(output.data, inputPath));
+      const plannedOutputPaths = saveDeterministicOutputs(outputs, inputPath, true, outputBaseDir);
+      const visualResults = visualManifestContext
+        ? outputs.map(output => validateVisualManifestOutput(output.data, markdownContent, visualManifestContext))
+        : [];
+      if (visualManifestContext && visualResults.some(result => !result.valid)) {
+        if (!args.dryRun) {
+          visualResults.forEach((result, index) => {
+            writeVisualValidationReport(plannedOutputPaths[index], visualManifestContext, result);
+          });
+        }
+        const firstInvalid = visualResults.find(result => !result.valid);
+        const error = new Error(
+          `Divergência visual obrigatória em ${path.basename(inputPath)}: `
+          + firstInvalid.issues.map(issue => `${issue.topic_slug}/${issue.resource}`).join(', ')
+        );
+        error.code = 'LEIAUT_VISUAL_COMPLIANCE_INVALID';
+        error.details = { file: path.basename(inputPath), results: visualResults };
+        throw error;
+      }
       const outputPaths = saveDeterministicOutputs(outputs, inputPath, args.dryRun, outputBaseDir);
       if (visualManifestContext && !args.dryRun) {
-        outputPaths.forEach((outputPath, index) => {
-          const result = validateVisualManifestOutput(
-            outputs[index].data,
-            markdownContent,
-            visualManifestContext
-          );
-          writeVisualValidationReport(outputPath, visualManifestContext, result);
+        visualResults.forEach((result, index) => {
+          writeVisualValidationReport(outputPaths[index], visualManifestContext, result);
         });
       }
       const totalSections = outputs.reduce((sum, output) => sum + output.data.sections.length, 0);
@@ -2575,6 +2596,15 @@ async function processMarkdownFile(inputPath, args, outputBaseDir = process.cwd(
         `🎨 Validação visual: ${visualResult.valid ? 'OK' : 'divergências encontradas'}; `
         + `relatório ${path.basename(visualReportPath)}.`
       );
+      if (!visualResult.valid) {
+        const error = new Error(
+          `Divergência visual obrigatória em ${path.basename(inputPath)}: `
+          + visualResult.issues.map(issue => `${issue.topic_slug}/${issue.resource}`).join(', ')
+        );
+        error.code = 'LEIAUT_VISUAL_COMPLIANCE_INVALID';
+        error.details = { file: path.basename(inputPath), result: visualResult };
+        throw error;
+      }
     }
     fs.writeFileSync(outputPath, JSON.stringify(data, null, 2), 'utf-8');
 
@@ -2713,6 +2743,7 @@ if (require.main === module) {
 
 module.exports = {
     processarResumo,
+    processMarkdownFile,
     validateAndNormalizeOutput,
     cleanMermaidCode,
     parseLeiautArgs,
@@ -2724,6 +2755,7 @@ module.exports = {
     extractOriginalDocumentTitle,
     getCanonicalTopicTitle,
     buildDeterministicOutputs,
+    writeJsonOutput,
     splitByHeadingLevel,
     buildLeiautBlockPrompt,
     mergeLeiautBlockData,

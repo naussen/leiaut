@@ -36,6 +36,7 @@ const {
   getCanonicalTopicTitle,
   getLevelTwoHeadingTitles,
   buildDeterministicOutputs,
+  writeJsonOutput,
   buildLeiautBlockPrompt,
   mergeLeiautBlockData,
   collectPostGenerationDiagnostics,
@@ -134,6 +135,11 @@ function assert(condition, testName) {
     assert(fs.existsSync(reportPath), 'Relatório visual agregado é gravado');
     const report = JSON.parse(fs.readFileSync(reportPath, 'utf8'));
     assert(!Object.hasOwn(report, 'content_markdown'), 'Relatório não contém conteúdo privado');
+    const atomicOutputPath = path.join(visualDir, 'atomic.json');
+    writeJsonOutput(atomicOutputPath, { version: 1 });
+    writeJsonOutput(atomicOutputPath, { version: 2 });
+    nodeAssert.strictEqual(JSON.parse(fs.readFileSync(atomicOutputPath, 'utf8')).version, 2);
+    assert(!fs.readdirSync(visualDir).some(name => name.endsWith('.tmp')), 'Arquivo temporário não permanece após publicação');
     const invalidData = { ...data, sections: [{ ...data.sections[0], callouts: [] }] };
     assert(!validateVisualManifestOutput(invalidData, markdown, context).valid, 'Perda de realce no JSON é reportada');
   } finally {

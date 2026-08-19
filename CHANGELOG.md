@@ -6,6 +6,9 @@
 - injeta instrução restrita de preservação de recursos visuais no prompt do LEIAUT;
 - compara recursos do Markdown com o JSON e gera relatório `.visual-validation.json` sem conteúdo privado;
 - associa tópicos do manifesto por `source_index` ou título canônico.
+- transforma divergência visual obrigatória em erro antes da gravação;
+- preserva JSON anterior quando a validação visual falha;
+- grava JSONs aprovados por arquivo temporário e renomeação atômica.
 
 ## 2026-08-19
 

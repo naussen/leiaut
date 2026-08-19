@@ -58,16 +58,31 @@ function validateVisualManifestOutput(data, markdown, context) {
     topics.forEach(topic => topic.requirements.forEach(requirement => {
         const observed = jsonObserved[requirement.resource] || 0;
         if (observed < requirement.minimum) {
-            issues.push({ code: 'VISUAL_RESOURCE_MISSING', topic_slug: topic.topic_slug, resource: requirement.resource, expected: requirement.minimum, observed });
+            issues.push({ code: 'VISUAL_RESOURCE_MISSING', topic_slug: topic.topic_slug, section: requirement.target_section || null, resource: requirement.resource, expected: requirement.minimum, observed });
         }
         if (observed > requirement.maximum) {
-            issues.push({ code: 'VISUAL_RESOURCE_EXCESS', topic_slug: topic.topic_slug, resource: requirement.resource, expected: requirement.maximum, observed });
+            issues.push({ code: 'VISUAL_RESOURCE_EXCESS', topic_slug: topic.topic_slug, section: requirement.target_section || null, resource: requirement.resource, expected: requirement.maximum, observed });
         }
         if (markdownObserved[requirement.resource] > jsonObserved[requirement.resource]) {
-            issues.push({ code: 'VISUAL_RESOURCE_LOST_IN_JSON', topic_slug: topic.topic_slug, resource: requirement.resource, markdown: markdownObserved[requirement.resource], json: jsonObserved[requirement.resource] });
+            issues.push({ code: 'VISUAL_RESOURCE_LOST_IN_JSON', topic_slug: topic.topic_slug, section: requirement.target_section || null, resource: requirement.resource, markdown: markdownObserved[requirement.resource], json: jsonObserved[requirement.resource], expected: requirement.minimum, observed: jsonObserved[requirement.resource] });
         }
     }));
     return { valid: issues.length === 0, issues, markdown: markdownObserved, json: jsonObserved };
+}
+
+function assertVisualManifestOutput(data, markdown, context) {
+    const result = validateVisualManifestOutput(data, markdown, context);
+    if (!result.valid) {
+        const error = new Error(
+            `Divergência visual obrigatória: ${result.issues.map(issue => (
+                `${issue.topic_slug}/${issue.resource} esperado=${issue.expected} observado=${issue.observed}`
+            )).join('; ')}`
+        );
+        error.code = 'LEIAUT_VISUAL_COMPLIANCE_INVALID';
+        error.details = result;
+        throw error;
+    }
+    return result;
 }
 
 function writeVisualValidationReport(outputPath, context, result) {
@@ -83,7 +98,14 @@ function writeVisualValidationReport(outputPath, context, result) {
         json_resources: result.json,
         issues: result.issues,
     };
-    fs.writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
+    fs.mkdirSync(path.dirname(reportPath), { recursive: true });
+    const temporaryPath = `${reportPath}.${process.pid}.${Date.now()}.tmp`;
+    try {
+        fs.writeFileSync(temporaryPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
+        fs.renameSync(temporaryPath, reportPath);
+    } finally {
+        if (fs.existsSync(temporaryPath)) fs.unlinkSync(temporaryPath);
+    }
     return reportPath;
 }
 
@@ -93,5 +115,6 @@ module.exports = {
     observeMarkdownResources,
     observeJsonResources,
     validateVisualManifestOutput,
+    assertVisualManifestOutput,
     writeVisualValidationReport,
 };

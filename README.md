@@ -108,6 +108,8 @@ O LEIAUT aceita `--visual-manifest caminho.json`. Sem essa opção, procura auto
 
 O contrato visual é inserido no prompt como instrução restrita: o LEIAUT deve transportar tabela, Mermaid, realce e mnemônico como o mesmo tipo de recurso, sem substituir uma ferramenta por outra. Depois da normalização, é gravado um arquivo `<saida>.visual-validation.json` contendo somente contagens, tópicos, hash do manifesto e divergências; o texto de estudo não é copiado para esse relatório. Neste pacote, divergências são reportadas; o bloqueio da publicação será ativado no pacote de validação anterior à gravação.
 
+Com o bloqueio visual ativo, uma divergência obrigatória retorna erro antes da gravação e preserva o JSON anterior. A publicação bem-sucedida usa arquivo temporário no mesmo diretório e renomeação atômica; o resumo de lote identifica o arquivo, tópico, recurso e contagem divergente.
+
 ## Modos sem IA
 
 Gerar estrutura determinística sem chamar o Vertex AI:
