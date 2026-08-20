@@ -152,9 +152,13 @@ function buildVisualPromptInstruction(context) {
     ]);
     return [
         'CONTRATO VISUAL VINCULADO AO PYGEM:',
+        'As quantidades do contrato são globais para o arquivo inteiro, não uma cota por seção. Quando o máximo for 1, produza exatamente uma ocorrência no JSON e não repita o recurso em outras seções.',
+        'Para highlight, conte cada item de callouts como uma ocorrência global; quando houver máximo 1, retorne somente um callout no arquivo inteiro.',
+        'Para mermaid, preencha mermaid_mindmap em uma única seção quando o máximo for 1; nunca espalhe o mesmo diagrama por várias seções.',
         'Preserve no JSON o mesmo tipo de recurso visual já produzido no Markdown.',
         'Não substitua tabela por Mermaid, Mermaid por lista, realce por texto comum ou mnemônico por outro recurso.',
         'Não invente recursos ausentes e não altere o conteúdo factual para cumprir o contrato.',
+        'Mermaid obrigatÃ³rio: use um Ãºnico graph TD ou flowchart TD curto, com 2 a 6 nÃ³s e no mÃ¡ximo 6 relaÃ§Ãµes; se a fonte for densa, comprima para a pergunta decisÃ³ria e os principais desfechos.',
         ...lines,
     ].join('\n');
 }

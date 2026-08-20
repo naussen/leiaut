@@ -13,6 +13,7 @@
 - rejeita slugs fragmentados, ambíguos ou duplicados no lote;
 - expõe mapa explícito para migração `topic_id` antigo → novo, sem alterar banco.
 - ajusta o detector de slug para não tratar conectores editoriais como fragmentação OCR.
+- restringe no prompt a cardinalidade global dos recursos e recupera Mermaid obrigatório em formato compacto seguro quando o modelo excede o limite.
 
 ## 2026-08-19
 

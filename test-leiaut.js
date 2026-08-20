@@ -38,6 +38,7 @@ const {
   buildDeterministicOutputs,
   writeJsonOutput,
   buildLeiautBlockPrompt,
+  enforceVisualResourceQuantities,
   mergeLeiautBlockData,
   collectPostGenerationDiagnostics,
   formatDiagnosticsLog,
@@ -129,6 +130,15 @@ function assert(condition, testName) {
       }],
     };
     nodeAssert.deepStrictEqual(observeJsonResources(data), { table: 1, mermaid: 1, highlight: 1, mnemonic: 1 });
+    const quantityData = {
+      sections: [
+        { title: 'Primeira', content_markdown: '', callouts: [{ type: 'info' }, { type: 'warning' }], mnemonics: [], flashcards: [], mermaid_mindmap: '' },
+        { title: 'Segunda', content_markdown: '', callouts: [{ type: 'tip' }], mnemonics: [], flashcards: [], mermaid_mindmap: '' },
+      ],
+    };
+    enforceVisualResourceQuantities(quantityData, markdown, context);
+    nodeAssert.strictEqual(observeJsonResources(quantityData).highlight, 1, 'Quantidade global de realce é limitada a um');
+    nodeAssert.strictEqual(observeJsonResources(quantityData).mermaid, 1, 'Mermaid obrigatório é recuperado da fonte');
     const result = validateVisualManifestOutput(data, markdown, context);
     assert(result.valid, 'Saída JSON compatível com manifesto deve ser aceita');
     const reportPath = writeVisualValidationReport(path.join(visualDir, 'saida.json'), context, result);

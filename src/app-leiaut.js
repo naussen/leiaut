@@ -1265,6 +1265,87 @@ function cleanMermaidInSections(data, verbose = true) {
     return data;
 }
 
+function extractSourceMermaid(markdown) {
+    const match = String(markdown || '').match(/```mermaid[ \t]*\r?\n([\s\S]*?)```/i);
+    return match ? match[1].trim() : '';
+}
+
+function compactSourceMermaid(sourceMermaid) {
+    const labels = [];
+    const labelPattern = /(?:[A-Z][A-Z0-9_]*)\s*(?:\[([^\]]+)\]|\{([^}]+)\}|\(([^)]+)\))/g;
+    let match;
+    while ((match = labelPattern.exec(sourceMermaid)) && labels.length < 4) {
+        const label = String(match[1] || match[2] || match[3] || '')
+            .replace(/[\r\n]+/g, ' ')
+            .replace(/"/g, '\\"')
+            .trim()
+            .slice(0, 36)
+            .trim();
+        if (label && !labels.includes(label)) labels.push(label);
+    }
+    if (labels.length < 3) return '';
+    return [
+        'graph TD',
+        `    A["${labels[0]}"] --> B["${labels[1]}"]`,
+        `    B --> C["${labels[2]}"]`,
+        labels[3] ? `    B --> D["${labels[3]}"]` : '',
+    ].filter(Boolean).join('\n');
+}
+
+function normalizeResourceTitle(value) {
+    return String(value || '')
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, ' ')
+        .trim();
+}
+
+function enforceVisualResourceQuantities(data, markdown, visualManifestContext) {
+    if (!data || !visualManifestContext?.topics?.length) return data;
+    const requirements = visualManifestContext.topics.flatMap(topic => topic.requirements || []);
+    const mermaidRequirement = requirements.find(requirement => requirement.resource === 'mermaid');
+    const highlightRequirement = requirements.find(requirement => requirement.resource === 'highlight');
+
+    if (mermaidRequirement && mermaidRequirement.minimum > 0) {
+        const mermaidSections = data.sections.filter(section => String(section.mermaid_mindmap || '').trim());
+        if (mermaidSections.length === 0) {
+            const sourceMermaid = extractSourceMermaid(markdown);
+            if (sourceMermaid) {
+                const transportMermaid = cleanMermaidCode(sourceMermaid, { title: 'visual-manifest-recovery' })
+                    || compactSourceMermaid(sourceMermaid);
+                const target = mermaidRequirement.target_section
+                    ? normalizeResourceTitle(mermaidRequirement.target_section)
+                    : '';
+                const section = data.sections.find(item => target && normalizeResourceTitle(item.title).includes(target))
+                    || data.sections[data.sections.length - 1];
+                if (section && transportMermaid) {
+                    section.mermaid_mindmap = transportMermaid;
+                    console.warn('⚠️ Mermaid obrigatório recuperado literalmente da fonte para transporte ao JSON.');
+                }
+            }
+        }
+        const retained = data.sections.find(section => String(section.mermaid_mindmap || '').trim());
+        data.sections.forEach(section => {
+            if (section !== retained && mermaidRequirement.maximum === 1) section.mermaid_mindmap = '';
+        });
+    }
+
+    if (highlightRequirement && highlightRequirement.maximum === 1) {
+        let retained = false;
+        data.sections.forEach(section => {
+            if (!Array.isArray(section.callouts)) return;
+            if (!retained && section.callouts.length > 0) {
+                section.callouts = [section.callouts[0]];
+                retained = true;
+            } else {
+                section.callouts = [];
+            }
+        });
+    }
+    return data;
+}
+
 function renumberSectionIds(data) {
     if (!data || typeof data !== 'object' || !Array.isArray(data.sections)) return data;
 
@@ -2536,6 +2617,7 @@ async function processMarkdownFile(inputPath, args, outputBaseDir = process.cwd(
         visualManifestContext
       });
       outputs.forEach(output => validateAndNormalizeOutput(output.data, inputPath));
+      outputs.forEach(output => enforceVisualResourceQuantities(output.data, markdownContent, visualManifestContext));
       const plannedOutputPaths = saveDeterministicOutputs(outputs, inputPath, true, outputBaseDir);
       const visualResults = visualManifestContext
         ? outputs.map(output => validateVisualManifestOutput(output.data, markdownContent, visualManifestContext))
@@ -2619,6 +2701,8 @@ async function processMarkdownFile(inputPath, args, outputBaseDir = process.cwd(
     canonicalizeSectionTitlesFromSource(data, markdownContent);
     recoverEmptySectionsFromSource(data, markdownContent);
     assertSectionStructureMatchesSource(data, markdownContent);
+    cleanMermaidInSections(data, false);
+    enforceVisualResourceQuantities(data, markdownContent, visualManifestContext);
     cleanMermaidInSections(data, false);
     assertImportableSections(data);
 
@@ -2796,6 +2880,7 @@ module.exports = {
     writeJsonOutput,
     splitByHeadingLevel,
     buildLeiautBlockPrompt,
+    enforceVisualResourceQuantities,
     mergeLeiautBlockData,
     loadVisualManifest,
     buildVisualPromptInstruction,
