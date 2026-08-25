@@ -6,6 +6,7 @@ const {
   VertexAIConfigurationError,
   createVertexAIClient,
   getVertexAIConfig,
+  getVertexThinkingConfig,
 } = require('./src/config/vertex-ai');
 
 function test(name, callback) {
@@ -48,6 +49,17 @@ test('aceita região e modelo configuráveis', () => {
   }, { checkCredentialsFile: false });
   assert.strictEqual(config.location, 'southamerica-east1');
   assert.strictEqual(config.model, 'modelo-fixture');
+});
+
+test('adapta a configuração de pensamento à família do modelo', () => {
+  assert.deepStrictEqual(
+    getVertexThinkingConfig('gemini-3.5-flash', 100),
+    { thinkingLevel: 'MINIMAL', includeThoughts: false }
+  );
+  assert.deepStrictEqual(
+    getVertexThinkingConfig('gemini-2.5-flash', 100),
+    { thinkingBudget: 100, includeThoughts: false }
+  );
 });
 
 test('ignora API Keys e mantém o backend Vertex AI', () => {

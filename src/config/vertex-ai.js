@@ -1,8 +1,8 @@
 const fs = require('fs');
 const { GoogleGenAI } = require('@google/genai');
 
-const DEFAULT_VERTEX_LOCATION = 'us-central1';
-const DEFAULT_VERTEX_MODEL = 'gemini-2.5-flash';
+const DEFAULT_VERTEX_LOCATION = 'global';
+const DEFAULT_VERTEX_MODEL = 'gemini-3.5-flash';
 const DEFAULT_VERTEX_API_VERSION = 'v1';
 
 class VertexAIConfigurationError extends Error {
@@ -55,11 +55,22 @@ function createVertexAIClient(config = getVertexAIConfig()) {
   });
 }
 
+function getVertexThinkingConfig(model, thinkingBudget = 0) {
+  if (/^gemini-(?:3|[4-9])(?:\.|-)/.test(cleanEnvValue(model))) {
+    return { thinkingLevel: 'MINIMAL', includeThoughts: false };
+  }
+  return {
+    thinkingBudget: Math.max(0, Number(thinkingBudget) || 0),
+    includeThoughts: false
+  };
+}
+
 module.exports = {
   DEFAULT_VERTEX_API_VERSION,
   DEFAULT_VERTEX_LOCATION,
   DEFAULT_VERTEX_MODEL,
   VertexAIConfigurationError,
   createVertexAIClient,
-  getVertexAIConfig
+  getVertexAIConfig,
+  getVertexThinkingConfig
 };

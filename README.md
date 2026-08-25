@@ -21,8 +21,8 @@ Edite somente os valores não sensíveis no `.env`:
 
 ```env
 GOOGLE_CLOUD_PROJECT=seu-project-id
-GOOGLE_CLOUD_LOCATION=us-central1
-VERTEX_MODEL=gemini-2.5-flash
+GOOGLE_CLOUD_LOCATION=global
+VERTEX_MODEL=gemini-3.5-flash
 LEIAUT_BLOCK_INPUT_TOKENS=5000
 LEIAUT_TIMEOUT_MS=180000
 ```
@@ -145,8 +145,8 @@ Os testes não realizam chamadas de rede nem exigem credenciais.
 | Variável | Obrigatória | Padrão | Finalidade |
 |---|---:|---|---|
 | `GOOGLE_CLOUD_PROJECT` | Sim, no modo IA | — | Projeto GCP usado para cobrança e quota |
-| `GOOGLE_CLOUD_LOCATION` | Não | `us-central1` | Região do endpoint Vertex AI |
-| `VERTEX_MODEL` | Não | `gemini-2.5-flash` | ID do modelo no Vertex AI |
+| `GOOGLE_CLOUD_LOCATION` | Não | `global` | Endpoint Vertex AI compatível com o modelo padrão |
+| `VERTEX_MODEL` | Não | `gemini-3.5-flash` | ID do modelo GA no Vertex AI |
 | `GOOGLE_APPLICATION_CREDENTIALS` | Não, se ADC já existir | — | Caminho externo para JSON de Service Account |
 | `LEIAUT_BLOCK_INPUT_TOKENS` | Não | `5000` | Teto-alvo de cada bloco |
 | `LEIAUT_MAX_INPUT_TOKENS` | Não | `30000` | Teto de segurança por bloco |
@@ -162,10 +162,10 @@ Os testes não realizam chamadas de rede nem exigem credenciais.
 | `LEIAUT_OUTPUT_TOKEN_MULTIPLIER` | Não | `2` | Proporção inicial entre tokens do prompt e da resposta |
 | `LEIAUT_OUTPUT_TOKEN_RETRY_MULTIPLIER` | Não | `2` | Crescimento do orçamento após `MAX_TOKENS` |
 | `LEIAUT_MAX_OUTPUT_TOKEN_RETRY_MULTIPLIER` | Não | `8` | Limite acumulado de crescimento nas retentativas |
-| `LEIAUT_THINKING_BUDGET` | Não | `0` | Orçamento de raciocínio; `0` prioriza o JSON final completo |
+| `LEIAUT_THINKING_BUDGET` | Não | `0` | Compatibilidade com Gemini 2.5 explicitamente configurado; Gemini 3 usa `MINIMAL` |
 
 Respostas encerradas por `MAX_TOKENS` não são interpretadas nem publicadas parcialmente. O LEIAUT controla separadamente retentativas por truncagem e por indisponibilidade: somente a truncagem aumenta o orçamento. O orçamento de raciocínio fica desativado por padrão porque esta etapa é uma transformação estruturada, não uma tarefa de deliberação aberta.
 
 ## Modelo
 
-O padrão é `gemini-2.5-flash`, modelo documentado no Vertex AI. Para trocar de modelo, use `VERTEX_MODEL` com um ID disponível no mesmo projeto e região. Não use IDs presumidos ou nomes comerciais que não apareçam na documentação do Vertex AI.
+O padrão é `gemini-3.5-flash` no endpoint `global`. O `gemini-2.5-flash` entra em Extended Lifecycle Access em 20/10/2026 e permanece disponível somente por configuração explícita durante a transição. Gemini 3 usa `thinkingLevel=MINIMAL`; como o LEIAUT faz chamadas independentes, sem chat multi-turn ou function calling, não há assinatura de pensamento a reenviar entre requisições.

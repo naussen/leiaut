@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-08-25 — migração do Vertex AI para Gemini 3.5
+
+- altera o modelo padrão de `gemini-2.5-flash` para `gemini-3.5-flash` no endpoint `global`;
+- usa `thinkingLevel=MINIMAL` com Gemini 3 e preserva `thinkingBudget` para 2.5 explicitamente configurado;
+- adiciona `.env.example` sem credenciais e atualiza a orientação operacional.
+
 ## 2026-08-19 — manifesto visual
 
 - adiciona leitura de `_visual-plan.json` e `--visual-manifest` com validação de hash;

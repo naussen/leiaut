@@ -1,7 +1,11 @@
 const { Type } = require('@google/genai');
 const fs = require('fs');
 const path = require('path');
-const { createVertexAIClient, getVertexAIConfig } = require('./config/vertex-ai');
+const {
+  createVertexAIClient,
+  getVertexAIConfig,
+  getVertexThinkingConfig,
+} = require('./config/vertex-ai');
 const { estimateTokens, splitContentIntoBlocks } = require('./services/tokenService');
 const { validateTopicFlashcards } = require('./leiaut/flashcard-quality');
 const {
@@ -971,10 +975,7 @@ async function generateStructuredContent(modelName, contents, timeoutMs, label, 
             responseSchema: responseSchema,
             temperature: 0.2,
             maxOutputTokens,
-            thinkingConfig: {
-              thinkingBudget: Math.max(0, Number(retryOptions.thinkingBudget) || 0),
-              includeThoughts: false
-            },
+            thinkingConfig: getVertexThinkingConfig(modelName, retryOptions.thinkingBudget),
             httpOptions: {
               timeout: timeoutMs,
               // O LEIAUT controla e registra os retries para evitar tentativas ocultas em cascata.
