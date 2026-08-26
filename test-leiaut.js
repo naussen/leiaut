@@ -52,6 +52,30 @@ const {
   calculateFlexibleOutputTokens,
 } = require('./src/app-leiaut');
 const { splitContentIntoBlocks } = require('./src/services/tokenService');
+
+nodeAssert.strictEqual(
+  parseLeiautArgs(['Afo.md', '--discipline', 'Administração Financeira e Orçamentária - TESTE 1']).discipline,
+  'Administração Financeira e Orçamentária - TESTE 1',
+  'Disciplina explícita é aceita pela CLI'
+);
+
+const ocrSource = [
+  '## 4ª Etap a: Con Trole e Av Ali Ação',
+  '',
+  'Conteúdo da seção.',
+].join('\n');
+const ocrData = { sections: [{ title: 'Controle e avaliação' }] };
+nodeAssert.doesNotThrow(
+  () => assertSectionStructureMatchesSource(ocrData, ocrSource),
+  'Título OCR fragmentado é comparado à forma normalizada pelo modelo'
+);
+nodeAssert.doesNotThrow(
+  () => assertSectionStructureMatchesSource(
+    { sections: [{ title: 'Lei Geral' }] },
+    '## Lei Geral\n\nConteúdo.'
+  ),
+  'Título curto legítimo não é unido pelo reparo OCR'
+);
 const {
   loadVisualManifest,
   buildVisualPromptInstruction,

@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-08-26 — robustez de títulos OCR e disciplina explícita
+
+- aceita `--discipline` como autoridade para processamento individual e em lote;
+- compara títulos com fragmentação OCR conservadora, sem relaxar divergências reais de estrutura.
+
 ## 2026-08-26 — saída configurável em lote
 
 - adiciona `--output-dir` ao processamento Markdown para permitir definir a pasta de saída sem alterar o formato dos JSONs.

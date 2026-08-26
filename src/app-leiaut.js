@@ -82,7 +82,7 @@ function getNonNegativeIntegerEnv(name, fallback) {
 }
 
 function parseLeiautArgs(args) {
-    const valueOptions = new Set(['--visual-manifest', '--output-dir']);
+    const valueOptions = new Set(['--visual-manifest', '--output-dir', '--discipline']);
     const positional = [];
     for (let index = 0; index < args.length; index += 1) {
         if (valueOptions.has(args[index])) {
@@ -108,6 +108,10 @@ function parseLeiautArgs(args) {
         })(),
         outputDir: (() => {
             const index = args.indexOf('--output-dir');
+            return index >= 0 ? args[index + 1] || null : null;
+        })(),
+        discipline: (() => {
+            const index = args.indexOf('--discipline');
             return index >= 0 ? args[index + 1] || null : null;
         })(),
     };
@@ -199,7 +203,7 @@ function replaceKnownPortugueseTypos(value) {
 }
 
 function normalizeTitleKey(value) {
-    return replaceKnownPortugueseTypos(value)
+    return removeOcrSectionPrefix(repairOcrTitle(replaceKnownPortugueseTypos(value)))
         .normalize('NFD')
         .replace(/[\u0300-\u036f]/g, '')
         .toLowerCase()
@@ -227,7 +231,7 @@ function collectContextualAcronyms(value) {
 }
 
 function normalizeStudyTitle(value, contextText = '') {
-    const corrected = replaceKnownPortugueseTypos(value).replace(/\s+/g, ' ').trim();
+    const corrected = repairOcrTitle(replaceKnownPortugueseTypos(value)).replace(/\s+/g, ' ').trim();
     if (!corrected || !isPredominantlyUppercaseTitle(corrected)) return corrected;
 
     const contextualAcronyms = collectContextualAcronyms(contextText);
@@ -694,7 +698,7 @@ function buildDeterministicTopic(
 function buildDeterministicOutputs(markdownContent, inputPath, options = {}) {
     const originalDocumentTitle = extractOriginalDocumentTitle(markdownContent);
     const fallbackTitle = getCanonicalTopicTitle(markdownContent, titleFromFileName(inputPath));
-    const discipline = inferDiscipline(markdownContent, inputPath);
+    const discipline = options.discipline || inferDiscipline(markdownContent, inputPath);
 
     if (!options.splitByTopic) {
         const topicId = resolveTopicId({
@@ -750,6 +754,38 @@ function buildDeterministicOutputs(markdownContent, inputPath, options = {}) {
     });
 
     return assertUniqueTopicIds(outputs);
+}
+
+function removeOcrSectionPrefix(value) {
+    return String(value || '').replace(
+        /^\s*\d+\s*[ªº]?\s+\p{L}{3,}\s*:\s*/u,
+        ''
+    );
+}
+
+function repairOcrTitle(value) {
+    let repaired = String(value || '');
+    const uppercaseFragmentPattern = /\b([\p{Lu}À-Ý][\p{Ll}à-ÿ]{1,4})\s+([\p{Lu}À-Ý][\p{Ll}à-ÿ]{1,4})\b/gu;
+    const lowercaseFragmentPattern = /\b[\p{Lu}À-Ý][\p{Ll}à-ÿ]{2,5}\s+[\p{Ll}à-ÿ]{1,2}\b/u;
+    const uppercaseFragments = repaired.match(uppercaseFragmentPattern) || [];
+    if (!lowercaseFragmentPattern.test(repaired) && uppercaseFragments.length < 2) return repaired;
+
+    let previous;
+    do {
+        previous = repaired;
+        repaired = repaired.replace(
+            uppercaseFragmentPattern,
+            '$1$2'
+        );
+        repaired = repaired.replace(
+            /\b([\p{Lu}À-Ý][\p{Ll}à-ÿ]{1,4}(?:[\p{Lu}À-Ý][\p{Ll}à-ÿ]{1,4})+)\s+([\p{Lu}À-Ý][\p{Ll}à-ÿ]{1,4})\b/gu,
+            '$1$2'
+        );
+    } while (repaired !== previous);
+    return repaired.replace(
+        /\b([\p{Lu}À-Ý][\p{Ll}à-ÿ]{2,5})\s+([\p{Ll}à-ÿ]{1,2})\b/gu,
+        '$1$2'
+    );
 }
 
 function applyCanonicalTopicId(data, context) {
@@ -1179,7 +1215,7 @@ async function generateLeiautData(markdownContent, inputPath, options) {
     const context = {
         fileName: path.basename(inputPath),
         topicTitle: getCanonicalTopicTitle(markdownContent, titleFromFileName(inputPath)),
-        discipline: inferDiscipline(markdownContent, inputPath),
+        discipline: options.discipline || inferDiscipline(markdownContent, inputPath),
         visualPromptInstruction: buildVisualPromptInstruction(options.visualManifestContext),
     };
     context.topicId = resolveTopicId({
@@ -2288,7 +2324,7 @@ function writePostGenerationDiagnostics(data, outputPath) {
 /**
  * Valida e normaliza o JSON gerado
  */
-function validateAndNormalizeOutput(data, sourceFilePath = '') {
+function validateAndNormalizeOutput(data, sourceFilePath = '', disciplineOverride = '') {
     if (!data || typeof data !== 'object') {
         console.warn("⚠️ Dados inválidos recebidos para validação.");
         return data;
@@ -2315,7 +2351,8 @@ function validateAndNormalizeOutput(data, sourceFilePath = '') {
     }
 
     // 2. Validar e normalizar discipline sem restringir o projeto a disciplinas jurídicas.
-    const disciplineFromFileName = inferDisciplineFromFileName(sourceFilePath);
+    const disciplineFromFileName = disciplineOverride?.trim()
+        || inferDisciplineFromFileName(sourceFilePath);
     const disciplineAliases = new Map([
         ['orcamento publico', 'Administração Financeira e Orçamentária']
     ]);
@@ -2619,9 +2656,10 @@ async function processMarkdownFile(inputPath, args, outputBaseDir = process.cwd(
       console.log(`🧭 Modo determinístico ativado (${args.splitByTopic ? 'split por tópico ##' : 'arquivo único'}). Nenhuma chamada ao Gemini será feita.`);
       const outputs = buildDeterministicOutputs(markdownContent, inputPath, {
         splitByTopic: args.splitByTopic,
+        discipline: args.discipline,
         visualManifestContext
       });
-      outputs.forEach(output => validateAndNormalizeOutput(output.data, inputPath));
+      outputs.forEach(output => validateAndNormalizeOutput(output.data, inputPath, args.discipline));
       outputs.forEach(output => enforceVisualResourceQuantities(output.data, markdownContent, visualManifestContext));
       const plannedOutputPaths = saveDeterministicOutputs(outputs, inputPath, true, outputBaseDir);
       const visualResults = visualManifestContext
@@ -2698,11 +2736,12 @@ async function processMarkdownFile(inputPath, args, outputBaseDir = process.cwd(
       outputTokenRetryMultiplier,
       maxOutputTokenRetryMultiplier,
       thinkingBudget,
+      discipline: args.discipline,
       visualManifestContext
     });
 
     // Grava somente depois das normalizações e da validação estrutural contra a fonte.
-    data = validateAndNormalizeOutput(data, inputPath);
+    data = validateAndNormalizeOutput(data, inputPath, args.discipline);
     canonicalizeSectionTitlesFromSource(data, markdownContent);
     recoverEmptySectionsFromSource(data, markdownContent);
     assertSectionStructureMatchesSource(data, markdownContent);
