@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-08-26 — saída configurável em lote
+
+- adiciona `--output-dir` ao processamento Markdown para permitir definir a pasta de saída sem alterar o formato dos JSONs.
+
 ## 2026-08-25 — migração do Vertex AI para Gemini 3.5
 
 - altera o modelo padrão de `gemini-2.5-flash` para `gemini-3.5-flash` no endpoint `global`;

@@ -82,7 +82,7 @@ function getNonNegativeIntegerEnv(name, fallback) {
 }
 
 function parseLeiautArgs(args) {
-    const valueOptions = new Set(['--visual-manifest']);
+    const valueOptions = new Set(['--visual-manifest', '--output-dir']);
     const positional = [];
     for (let index = 0; index < args.length; index += 1) {
         if (valueOptions.has(args[index])) {
@@ -104,6 +104,10 @@ function parseLeiautArgs(args) {
         dryRun: args.includes('--dry-run'),
         visualManifest: (() => {
             const index = args.indexOf('--visual-manifest');
+            return index >= 0 ? args[index + 1] || null : null;
+        })(),
+        outputDir: (() => {
+            const index = args.indexOf('--output-dir');
             return index >= 0 ? args[index + 1] || null : null;
         })(),
     };
@@ -2773,7 +2777,9 @@ function reportPipelineError(error, context = '') {
 }
 
 async function processMarkdownDirectory(inputPath, inputFiles, args) {
-  const outputBaseDir = path.join(process.cwd(), `${path.basename(inputPath)}_processado`);
+  const outputBaseDir = args.outputDir
+    ? (path.isAbsolute(args.outputDir) ? args.outputDir : path.resolve(process.cwd(), args.outputDir))
+    : path.join(process.cwd(), `${path.basename(inputPath)}_processado`);
   if (!args.dryRun && !fs.existsSync(outputBaseDir)) {
     fs.mkdirSync(outputBaseDir, { recursive: true });
   }
@@ -2850,7 +2856,10 @@ async function processarResumo() {
       return;
     }
 
-    await processMarkdownFile(resolvedInput.files[0], args);
+    const outputBaseDir = args.outputDir
+      ? (path.isAbsolute(args.outputDir) ? args.outputDir : path.resolve(process.cwd(), args.outputDir))
+      : process.cwd();
+    await processMarkdownFile(resolvedInput.files[0], args, outputBaseDir);
   } catch (error) {
     reportPipelineError(error);
     process.exitCode = 1;
