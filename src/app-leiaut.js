@@ -241,7 +241,11 @@ function collectContextualAcronyms(value) {
 }
 
 function normalizeStudyTitle(value, contextText = '') {
-    const corrected = repairOcrTitle(replaceKnownPortugueseTypos(value)).replace(/\s+/g, ' ').trim();
+    const corrected = repairOcrTitle(replaceKnownPortugueseTypos(value))
+        .replace(/\s*\[arquivo:\s*\d+\]\s*$/i, '')
+        .replace(/\bTiposde\b/gi, 'Tipos de')
+        .replace(/\s+/g, ' ')
+        .trim();
     if (!corrected || !isPredominantlyUppercaseTitle(corrected)) return corrected;
 
     const contextualAcronyms = collectContextualAcronyms(contextText);

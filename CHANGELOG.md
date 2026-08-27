@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-08-27 — limpeza de metadados de título
+
+- remove sufixos técnicos `[arquivo: NNN]` e corrige o erro OCR conhecido `Tiposde` nos títulos canônicos.
+
 ## 2026-08-27 — transporte de fórmulas KaTeX
 
 - preserva fórmulas quantitativas em KaTeX no `content_markdown`, com variáveis definidas no contexto adjacente.
