@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-08-27 — transporte de fórmulas KaTeX
+
+- preserva fórmulas quantitativas em KaTeX no `content_markdown`, com variáveis definidas no contexto adjacente.
+
 ## 2026-08-27 — saneamento de metadados de conteúdo
 
 - corrige rótulos conhecidos de disciplina corrompidos por caracteres `?` e bloqueia novos valores ainda corrompidos;

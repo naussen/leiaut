@@ -1507,6 +1507,7 @@ Regras de Transformação:
    - Corrija erros ortográficos evidentes nos títulos. Use "doutrina"; nunca "doutina".
 4. Linguagem Didática: Reescreva o conteúdo mantendo o rigor, mas com estilo claro e direto em Markdown.
    - Em 'content_markdown', use quebras de linha reais. NUNCA escreva os dois caracteres literais "\\n" para representar uma quebra.
+   - Quando houver fórmula ou igualdade quantitativa na fonte, preserve-a em sintaxe KaTeX: '$...$' em linha ou '$$...$$' em bloco. Nunca a transforme em bloco de código; defina as variáveis no texto adjacente e mantenha a convenção brasileira para valores fora da fórmula.
 5. Fidelidade ao Arquivo: Preserve a disciplina, o vocabulário técnico e o recorte temático do arquivo. Não importe conceitos, exemplos, pegadinhas ou mnemônicos de outra disciplina.
 6. Callouts: Sempre retorne o campo 'callouts' como array. Identifique pegadinhas (warning), conceitos (info) ou métodos (tip) somente quando estiverem ancorados no conteúdo fornecido. Quando houver base clara, crie de 1 a 3 callouts úteis; se não houver base, retorne [].
    - Use 'warning' somente quando houver risco concreto de erro em prova: exceção ou ressalva, vedação, requisito cumulativo, prazo ou limite numérico, inversão conceitual recorrente, termo técnico facilmente confundível ou entendimento contraintuitivo expressamente sustentado pela fonte.
