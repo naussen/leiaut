@@ -418,6 +418,8 @@ function canonicalizeSectionTitlesFromSource(data, markdown) {
         const expectedTitle = expectedTitles[index];
         const actualTitle = normalizeStudyTitle(section?.title);
         const exactMatch = normalizeTitleKey(actualTitle) === normalizeTitleKey(expectedTitle);
+        const whitespaceOnlyOcrMatch = normalizeTitleCompactKey(actualTitle)
+            === normalizeTitleCompactKey(expectedTitle);
         const legalArticleAbbreviationMatch = normalizeLegalArticleCitationKey(actualTitle)
             === normalizeLegalArticleCitationKey(expectedTitle);
         const expectedWithoutParenthetical = expectedTitle
@@ -427,7 +429,7 @@ function canonicalizeSectionTitlesFromSource(data, markdown) {
         const omittedParenthetical = expectedWithoutParenthetical !== expectedTitle
             && normalizeTitleKey(actualTitle) === normalizeTitleKey(expectedWithoutParenthetical);
 
-        if (exactMatch || legalArticleAbbreviationMatch || omittedParenthetical) {
+        if (exactMatch || whitespaceOnlyOcrMatch || legalArticleAbbreviationMatch || omittedParenthetical) {
             section.title = expectedTitle;
         }
     });
@@ -768,6 +770,10 @@ function buildDeterministicOutputs(markdownContent, inputPath, options = {}) {
     });
 
     return assertUniqueTopicIds(outputs);
+}
+
+function normalizeTitleCompactKey(value) {
+    return normalizeTitleKey(value).replace(/\s+/g, '');
 }
 
 function removeDocumentTitleMarker(content) {
