@@ -30,6 +30,7 @@ const {
   assertImportableSections,
   cleanMermaidCode,
   parseLeiautArgs,
+  resolveOutputDirectory,
   resolveMarkdownInputPaths,
   slugify,
   inferDiscipline,
@@ -622,6 +623,31 @@ _log('\n📦 Grupo 9: Parser determinístico sem IA');
   assertEqual(args.inputFile, 'contabilidade.md', 'parseLeiautArgs identifica arquivo');
   assert(args.noAi, '--split-by-topic implica noAi');
   assert(args.splitByTopic, '--split-by-topic ativado');
+
+  const outputArgs = parseLeiautArgs([
+    'contabilidade.md',
+    '--output-dir',
+    'resultados',
+  ]);
+  assertEqual(outputArgs.outputDir, 'resultados', '--output-dir identifica a pasta de saída');
+  assertEqual(
+    resolveOutputDirectory('resultados', 'fallback'),
+    path.resolve(process.cwd(), 'resultados'),
+    'pasta de saída relativa é resolvida a partir do diretório atual'
+  );
+  assertEqual(
+    resolveOutputDirectory(undefined, 'fallback'),
+    'fallback',
+    'pasta de saída padrão é preservada'
+  );
+
+  let missingOutputValue = false;
+  try {
+    parseLeiautArgs(['contabilidade.md', '--output-dir']);
+  } catch (error) {
+    missingOutputValue = error.code === 'LEIAUT_OPTION_VALUE_REQUIRED';
+  }
+  assert(missingOutputValue, '--output-dir sem valor é rejeitado');
 
   const temporaryInputDir = fs.mkdtempSync(path.join(__dirname, '.tmp-leiaut-input-'));
   try {

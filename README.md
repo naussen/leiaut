@@ -69,6 +69,15 @@ npm.cmd run leiaut -- caminho\arquivo.md
 
 O arquivo de saída será criado no diretório atual como `arquivo_processado.json`.
 
+Use `--output-dir` para escolher a pasta dos arquivos gerados, tanto no processamento
+de um arquivo quanto no processamento em lote. O diretório é criado automaticamente
+quando necessário; caminhos relativos são interpretados a partir do diretório atual:
+
+```powershell
+npm.cmd run leiaut -- caminho\arquivo.md --output-dir C:\caminho\resultados
+npm.cmd run leiaut -- C:\caminho\pasta-com-markdown --output-dir .\resultados
+```
+
 Quando a primeira linha útil do Markdown usa `@@ Título` ou `@@@ Título`, esse texto é a fonte canônica de `topic_title` e prevalece sobre a resposta da IA. Títulos já editoriais são preservados; títulos predominantemente em caixa alta são normalizados para o contrato de importação do site, mantendo siglas conhecidas ou confirmadas pelo contexto. A mesma regra vale para cabeçalhos Markdown de subtítulos e seções (`##`, `###` e inferiores). Na ausência do marcador de título, permanece o fallback compatível pelo primeiro cabeçalho ou pelo nome do arquivo.
 
 Também é possível informar um diretório. Nesse modo, o LEIAUT processa sequencialmente
@@ -79,8 +88,9 @@ arquivos auxiliares e subdiretórios:
 npm.cmd run leiaut -- C:\caminho\pasta-com-markdown
 ```
 
-Os JSONs do lote serão salvos no diretório atual, dentro de
-`pasta-com-markdown_processado`. Se um arquivo falhar, os demais continuam sendo
+Sem `--output-dir`, os JSONs do lote serão salvos no diretório atual, dentro de
+`pasta-com-markdown_processado`. Com a opção, todos os JSONs do lote serão salvos na
+pasta informada. Se um arquivo falhar, os demais continuam sendo
 processados e o resumo final identifica cada falha. O processo termina com código de
 saída diferente de zero quando pelo menos um arquivo do lote não é concluído.
 Se já existir um JSON de uma execução anterior para um arquivo que falhou, ele é

@@ -87,8 +87,11 @@ function parseLeiautArgs(args) {
     for (let index = 0; index < args.length; index += 1) {
         if (valueOptions.has(args[index])) {
             if (!args[index + 1] || args[index + 1].startsWith('--')) {
-                const error = new Error('--visual-manifest exige o caminho de um arquivo JSON.');
-                error.code = 'LEIAUT_VISUAL_MANIFEST_PATH_REQUIRED';
+                const option = args[index];
+                const error = new Error(`${option} exige um valor.`);
+                error.code = option === '--visual-manifest'
+                    ? 'LEIAUT_VISUAL_MANIFEST_PATH_REQUIRED'
+                    : 'LEIAUT_OPTION_VALUE_REQUIRED';
                 throw error;
             }
             index += 1;
@@ -115,6 +118,13 @@ function parseLeiautArgs(args) {
             return index >= 0 ? args[index + 1] || null : null;
         })(),
     };
+}
+
+function resolveOutputDirectory(outputDir, defaultDirectory = process.cwd()) {
+    if (!outputDir) return defaultDirectory;
+    return path.isAbsolute(outputDir)
+        ? outputDir
+        : path.resolve(process.cwd(), outputDir);
 }
 
 function resolveMarkdownInputPaths(inputPath) {
@@ -2841,9 +2851,10 @@ function reportPipelineError(error, context = '') {
 }
 
 async function processMarkdownDirectory(inputPath, inputFiles, args) {
-  const outputBaseDir = args.outputDir
-    ? (path.isAbsolute(args.outputDir) ? args.outputDir : path.resolve(process.cwd(), args.outputDir))
-    : path.join(process.cwd(), `${path.basename(inputPath)}_processado`);
+  const outputBaseDir = resolveOutputDirectory(
+    args.outputDir,
+    path.join(process.cwd(), `${path.basename(inputPath)}_processado`)
+  );
   if (!args.dryRun && !fs.existsSync(outputBaseDir)) {
     fs.mkdirSync(outputBaseDir, { recursive: true });
   }
@@ -2920,9 +2931,7 @@ async function processarResumo() {
       return;
     }
 
-    const outputBaseDir = args.outputDir
-      ? (path.isAbsolute(args.outputDir) ? args.outputDir : path.resolve(process.cwd(), args.outputDir))
-      : process.cwd();
+    const outputBaseDir = resolveOutputDirectory(args.outputDir);
     await processMarkdownFile(resolvedInput.files[0], args, outputBaseDir);
   } catch (error) {
     reportPipelineError(error);
@@ -2940,6 +2949,7 @@ module.exports = {
     validateAndNormalizeOutput,
     cleanMermaidCode,
     parseLeiautArgs,
+    resolveOutputDirectory,
     resolveMarkdownInputPaths,
     countMarkdownHeadings,
     slugify,

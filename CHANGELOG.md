@@ -6,6 +6,11 @@
 - normaliza `Língua Portugues` para `Língua Portuguesa` sem remover sufixos de lote;
 - remove o marcador documental inicial `@@`/`@@@` do corpo de seções antes da gravação do JSON.
 
+## 2026-08-26 — local de saída para arquivo único e lote
+
+- documenta e testa `--output-dir` para escolher a pasta dos arquivos gerados nos dois modos de processamento;
+- centraliza a resolução de caminhos relativos e rejeita a opção sem valor.
+
 ## 2026-08-26 — robustez de títulos OCR e disciplina explícita
 
 - aceita `--discipline` como autoridade para processamento individual e em lote;
