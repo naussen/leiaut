@@ -20,6 +20,8 @@ const {
   normalizeStudyTitle,
   normalizeInlineTopicMarkers,
   removePygemRecoveryMarkers,
+  removeDocumentTitleMarker,
+  normalizeDisciplineLabel,
   removeOrphanMarkdownHeadings,
   validateMarkdownInput,
   assertSectionStructureMatchesSource,
@@ -57,6 +59,22 @@ nodeAssert.strictEqual(
   parseLeiautArgs(['Afo.md', '--discipline', 'Administração Financeira e Orçamentária - TESTE 1']).discipline,
   'Administração Financeira e Orçamentária - TESTE 1',
   'Disciplina explícita é aceita pela CLI'
+);
+
+nodeAssert.strictEqual(
+  normalizeDisciplineLabel('Administra??o Financeira e Or?ament?ria - TESTE 1'),
+  'Administração Financeira e Orçamentária - TESTE 1',
+  'Disciplina AFO corrompida pela linha de comando é recuperada'
+);
+nodeAssert.strictEqual(
+  normalizeDisciplineLabel('Língua Portugues - TESTE 2'),
+  'Língua Portuguesa - TESTE 2',
+  'Disciplina Língua Portuguesa é corrigida sem perder o sufixo'
+);
+nodeAssert.strictEqual(
+  removeDocumentTitleMarker('@@ Título do material\n\nConteúdo preservado.'),
+  'Conteúdo preservado.',
+  'Marcador documental não vaza para content_markdown'
 );
 
 const ocrSource = [

@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-08-27 — saneamento de metadados de conteúdo
+
+- corrige rótulos conhecidos de disciplina corrompidos por caracteres `?` e bloqueia novos valores ainda corrompidos;
+- normaliza `Língua Portugues` para `Língua Portuguesa` sem remover sufixos de lote;
+- remove o marcador documental inicial `@@`/`@@@` do corpo de seções antes da gravação do JSON.
+
 ## 2026-08-26 — robustez de títulos OCR e disciplina explícita
 
 - aceita `--discipline` como autoridade para processamento individual e em lote;

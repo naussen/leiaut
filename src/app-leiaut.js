@@ -756,6 +756,23 @@ function buildDeterministicOutputs(markdownContent, inputPath, options = {}) {
     return assertUniqueTopicIds(outputs);
 }
 
+function removeDocumentTitleMarker(content) {
+    const lines = String(content || '').split(/\r?\n/);
+    const firstContentIndex = lines.findIndex(line => line.trim());
+    if (firstContentIndex >= 0 && /^@@@?[ \t]+(?!#)\S/.test(lines[firstContentIndex].trim())) {
+        lines.splice(firstContentIndex, 1);
+    }
+    return lines.join('\n').trim();
+}
+
+function normalizeDisciplineLabel(value) {
+    return String(value || '')
+        .trim()
+        .replace(/\s+/g, ' ')
+        .replace(/Administra\?+o Financeira e Or\?+ament\?+ria/giu, 'Administração Financeira e Orçamentária')
+        .replace(/\bLíngua Portugues\b/giu, 'Língua Portuguesa');
+}
+
 function removeOcrSectionPrefix(value) {
     return String(value || '').replace(
         /^\s*\d+\s*[ªº]?\s+\p{L}{3,}\s*:\s*/u,
@@ -2351,7 +2368,7 @@ function validateAndNormalizeOutput(data, sourceFilePath = '', disciplineOverrid
     }
 
     // 2. Validar e normalizar discipline sem restringir o projeto a disciplinas jurídicas.
-    const disciplineFromFileName = disciplineOverride?.trim()
+    const disciplineFromFileName = normalizeDisciplineLabel(disciplineOverride)
         || inferDisciplineFromFileName(sourceFilePath);
     const disciplineAliases = new Map([
         ['orcamento publico', 'Administração Financeira e Orçamentária']
@@ -2366,7 +2383,7 @@ function validateAndNormalizeOutput(data, sourceFilePath = '', disciplineOverrid
         console.warn("⚠️ Campo 'discipline' ausente ou vazio. Definindo como 'Geral'.");
         data.discipline = "Geral";
     } else {
-        const normalizedDiscipline = String(data.discipline).trim().replace(/\s+/g, ' ');
+        const normalizedDiscipline = normalizeDisciplineLabel(data.discipline);
         // Corrige apenas variações de caixa/espaçamento em disciplinas conhecidas; desconhecidas são preservadas.
         const normalizedSearch = normalizeDisciplineSearchText(normalizedDiscipline);
         const found = canonicalDisciplines.find(d => normalizeDisciplineSearchText(d) === normalizedSearch);
@@ -2377,6 +2394,12 @@ function validateAndNormalizeOutput(data, sourceFilePath = '', disciplineOverrid
         } else {
             data.discipline = normalizedDiscipline;
         }
+    }
+
+    if (data.discipline.includes('?')) {
+        const error = new Error(`Disciplina contém caractere corrompido: "${data.discipline}".`);
+        error.code = 'LEIAUT_DISCIPLINE_ENCODING_INVALID';
+        throw error;
     }
 
     // 3. Validar topic_title
@@ -2447,7 +2470,9 @@ function validateAndNormalizeOutput(data, sourceFilePath = '', disciplineOverrid
             console.warn(`⚠️ Seção ${index + 1} ('${section.title}') sem 'content_markdown'.`);
             section.content_markdown = "";
         } else {
-            section.content_markdown = removeOrphanMarkdownHeadings(section.content_markdown);
+            section.content_markdown = removeDocumentTitleMarker(
+                removeOrphanMarkdownHeadings(section.content_markdown)
+            );
         }
 
         // 4.4. Validar callouts
@@ -2942,6 +2967,8 @@ module.exports = {
     normalizeStudyTitle,
     normalizeInlineTopicMarkers,
     removePygemRecoveryMarkers,
+    removeDocumentTitleMarker,
+    normalizeDisciplineLabel,
     removeOrphanMarkdownHeadings,
     validateMarkdownInput,
     assertSectionStructureMatchesSource,
