@@ -687,7 +687,7 @@ _log('\n📦 Grupo 7: Validação de flashcards');
     }]
   });
   removeInvalidFlashcards(d);
-  assertEqual(d.sections[0].flashcards.length, 1, 'Flashcard reprovado é removido e o cartão válido é preservado');
+  assertEqual(d.sections[0].flashcards.length, 0, 'Flashcards sem origem verificável são removidos');
 
   unmute();
 })();

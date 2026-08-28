@@ -1641,9 +1641,20 @@ const responseSchema = {
               type: Type.OBJECT,
               properties: {
                 question: { type: Type.STRING },
-                answer: { type: Type.STRING }
+                answer: { type: Type.STRING },
+                source: {
+                  type: Type.OBJECT,
+                  properties: {
+                    board: { type: Type.STRING },
+                    year: { type: Type.INTEGER },
+                    exam: { type: Type.STRING },
+                    question_id: { type: Type.STRING },
+                    status: { type: Type.STRING }
+                  },
+                  required: ["board", "year", "exam", "question_id", "status"]
+                }
               },
-              required: ["question", "answer"]
+              required: ["question", "answer", "source"]
             }
           },
           mermaid_mindmap: { type: Type.STRING }
