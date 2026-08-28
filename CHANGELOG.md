@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-08-28 — rótulos automáticos removidos de Mermaid
+
+- remove os rótulos genéricos `inicia em` e `prossegue para` das arestas sequenciais;
+- limpa esses rótulos de diagramas legados durante a normalização;
+- orienta novas gerações a rotular setas somente quando houver relação didática específica.
+
 ## 2026-08-27 — cardinalidade global de realces
 
 - limita callouts ao máximo global definido pelo manifesto visual, inclusive quando o teto é maior que um.

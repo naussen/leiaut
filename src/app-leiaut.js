@@ -1700,6 +1700,7 @@ Regras de Transformação:
    - IMPORTANTE: NÃO use cercas de código (como \`\`\`mermaid). Entregue APENAS o código puro.
    - IMPORTANTE: O código Mermaid deve obrigatoriamente conter quebras de linha (\\n) e recuos de espaços correspondentes para definir a hierarquia. NUNCA gere o diagrama em uma única linha, pois isso gera erros de sintaxe no renderizador.
    - Evite caracteres especiais como parênteses ou aspas dentro dos nós, a menos que use a sintaxe correta (ex: nó["Texto com (parenteses)"]).
+   - Não use rótulos genéricos nas setas, como "inicia em" ou "prossegue para"; rotule uma relação apenas quando o texto expressar vínculo didático específico.
    - Certifique-se de que a sintaxe seja 100% válida.`;
 
 /**
@@ -2167,7 +2168,7 @@ function buildTimelineStudyDiagram(uniqueLabels) {
         const stepId = `etapa_${index + 1}`;
         stepIds.push(stepId);
         lines.push(`    ${stepId}["${String(index + 1).padStart(2, '0')} · ${sanitizeMermaidLabel(label)}"]`);
-        lines.push(index === 0 ? `    inicio -->|inicia em| ${stepId}` : `    etapa_${index} -->|prossegue para| ${stepId}`);
+        lines.push(index === 0 ? `    inicio --> ${stepId}` : `    etapa_${index} --> ${stepId}`);
     });
 
     lines.push('    class inicio readableRoot;');
@@ -2348,7 +2349,9 @@ function normalizeMermaidDiagram(diagram, context = {}) {
 
 function cleanMermaidCode(code, context = {}) {
     if (!code) return "";
-    const diagrams = splitMermaidDiagrams(code);
+    const diagrams = splitMermaidDiagrams(String(code)
+        .replace(/--?>\|\s*inicia em\s*\|/giu, '-->')
+        .replace(/--?>\|\s*prossegue para\s*\|/giu, '-->'));
     if (diagrams.length === 0) return "";
 
     const preferred = diagrams.find(diagram => MERMAID_ALLOWED_START_PATTERN.test(diagram.trim().split(/\r?\n/)[0] || ''));

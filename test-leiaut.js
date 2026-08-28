@@ -416,6 +416,11 @@ assertEqual(
   'Omite diagrama denso para permitir outro recurso didático'
 );
 (() => {
+  nodeAssert.strictEqual(
+    cleanMermaidCode('flowchart TB\nA -->|inicia em| B\nB -->|prossegue para| C'),
+    'flowchart TB\nA --> B\nB --> C',
+    'Rótulos automáticos de aresta são removidos'
+  );
   const data = { sections: [{
     title: 'Teste',
     content_markdown: '',
