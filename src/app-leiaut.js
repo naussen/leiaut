@@ -1644,12 +1644,13 @@ const responseSchema = {
                 answer: { type: Type.STRING },
                 source: {
                   type: Type.OBJECT,
+                  description: "Use somente quando todos os metadados aparecerem explicitamente no conteúdo de entrada. Não invente ou infira dados; sem origem completa, retorne flashcards vazio.",
                   properties: {
-                    board: { type: Type.STRING },
-                    year: { type: Type.INTEGER },
-                    exam: { type: Type.STRING },
-                    question_id: { type: Type.STRING },
-                    status: { type: Type.STRING }
+                    board: { type: Type.STRING, description: "Somente CESPE, CEBRASPE, FCC ou FGV." },
+                    year: { type: Type.INTEGER, description: "Ano literal da questão." },
+                    exam: { type: Type.STRING, description: "Concurso/cargo literal da questão." },
+                    question_id: { type: Type.STRING, description: "Identificador literal da questão." },
+                    status: { type: Type.STRING, description: "Somente valid, após confirmação literal de não anulação." }
                   },
                   required: ["board", "year", "exam", "question_id", "status"]
                 }
