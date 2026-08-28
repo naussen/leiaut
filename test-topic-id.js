@@ -16,6 +16,14 @@ assert.strictEqual(
     assertCanonicalTopicSlug('relatorio-de-auditoria-nbc-ta-700-701-705-e-706'),
     'relatorio-de-auditoria-nbc-ta-700-701-705-e-706'
 );
+assert.strictEqual(
+    assertCanonicalTopicSlug('lei-6-404-76-acoes-em-tesouraria'),
+    'lei-6-404-76-acoes-em-tesouraria'
+);
+assert.strictEqual(
+    assertCanonicalTopicSlug('cpc-18-investimento-em-coligada-controlada-e-empreendimento-controlado-em-conjunto-ecc'),
+    'cpc-18-investimento-em-coligada-controlada-e-empreendimento-controlado-em-conjunto-ecc'
+);
 assert.strictEqual(inspectTopicSlug('a-b-c-d', { title: 'Tema' }).suspicious, true);
 assert.throws(() => assertCanonicalTopicSlug('tema--fragmentado'), error => error.code === 'LEIAUT_TOPIC_SLUG_SUSPECT');
 assert.throws(() => assertUniqueTopicIds([

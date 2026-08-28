@@ -1,6 +1,6 @@
 const path = require('path');
 
-const NON_FRAGMENTING_SHORT_SEGMENTS = new Set(['a', 'ao', 'as', 'da', 'das', 'de', 'do', 'dos', 'e', 'o', 'os']);
+const NON_FRAGMENTING_SHORT_SEGMENTS = new Set(['a', 'ao', 'as', 'da', 'das', 'de', 'do', 'dos', 'e', 'em', 'o', 'os']);
 
 function normalizeSlug(value) {
     return String(value || '')
@@ -18,7 +18,9 @@ function inspectTopicSlug(value, { title = '' } = {}) {
     if (/--|^-|-$/.test(slug)) reasons.push('separadores-repetidos');
     const segments = slug ? slug.split('-') : [];
     const shortSegments = segments.filter(segment => (
-        segment.length <= 2 && !NON_FRAGMENTING_SHORT_SEGMENTS.has(segment)
+        segment.length <= 2
+        && !/^\d+$/.test(segment)
+        && !NON_FRAGMENTING_SHORT_SEGMENTS.has(segment)
     )).length;
     if (shortSegments >= 3 || (segments.length >= 5 && shortSegments / segments.length >= 0.6)) {
         reasons.push('fragmentacao-excessiva');

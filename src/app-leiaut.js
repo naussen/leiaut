@@ -7,7 +7,7 @@ const {
   getVertexThinkingConfig,
 } = require('./config/vertex-ai');
 const { estimateTokens, splitContentIntoBlocks } = require('./services/tokenService');
-const { validateTopicFlashcards } = require('./leiaut/flashcard-quality');
+const { validateFlashcard, validateTopicFlashcards } = require('./leiaut/flashcard-quality');
 const {
     loadVisualManifest,
     buildVisualPromptInstruction,
@@ -240,8 +240,9 @@ function collectContextualAcronyms(value) {
     );
 }
 
-function normalizeStudyTitle(value, contextText = '') {
-    const corrected = repairOcrTitle(replaceKnownPortugueseTypos(value))
+function normalizeStudyTitle(value, contextText = '', options = {}) {
+    const typoCorrected = replaceKnownPortugueseTypos(value);
+    const corrected = (options.repairOcr === false ? typoCorrected : repairOcrTitle(typoCorrected))
         .replace(/\s*\[arquivo:\s*\d+\]\s*$/i, '')
         .replace(/\bTiposde\b/gi, 'Tipos de')
         .replace(/\s+/g, ' ')
@@ -411,7 +412,12 @@ function assertSectionStructureMatchesSource(data, markdown) {
 }
 
 function canonicalizeSectionTitlesFromSource(data, markdown) {
-    const expectedTitles = getLevelTwoHeadingTitles(markdown);
+    const titleContext = getTitleNormalizationContext(markdown);
+    const expectedTitles = String(markdown || '')
+        .split(/\r?\n/)
+        .map(line => line.trim())
+        .filter(line => /^##(?!#)\s+\S/.test(line))
+        .map(line => normalizeStudyTitle(stripHeadingSyntax(line), titleContext, { repairOcr: false }));
     if (!Array.isArray(data?.sections) || data.sections.length !== expectedTitles.length) return data;
 
     data.sections.forEach((section, index) => {
@@ -422,6 +428,14 @@ function canonicalizeSectionTitlesFromSource(data, markdown) {
             === normalizeTitleCompactKey(expectedTitle);
         const legalArticleAbbreviationMatch = normalizeLegalArticleCitationKey(actualTitle)
             === normalizeLegalArticleCitationKey(expectedTitle);
+        const actualCharacters = Array.from(actualTitle);
+        const expectedCharacters = Array.from(expectedTitle);
+        const symbolCorruptionMatch = actualCharacters.length === expectedCharacters.length
+            && actualCharacters.every((character, characterIndex) => {
+                const expectedCharacter = expectedCharacters[characterIndex];
+                if (normalizeTitleKey(character) === normalizeTitleKey(expectedCharacter)) return true;
+                return !/[\p{L}\p{N}]/u.test(character) && /\p{L}/u.test(expectedCharacter);
+            });
         const expectedWithoutParenthetical = expectedTitle
             .replace(/\s*\([^()]*\)\s*/g, ' ')
             .replace(/\s+/g, ' ')
@@ -429,7 +443,7 @@ function canonicalizeSectionTitlesFromSource(data, markdown) {
         const omittedParenthetical = expectedWithoutParenthetical !== expectedTitle
             && normalizeTitleKey(actualTitle) === normalizeTitleKey(expectedWithoutParenthetical);
 
-        if (exactMatch || whitespaceOnlyOcrMatch || legalArticleAbbreviationMatch || omittedParenthetical) {
+        if (exactMatch || whitespaceOnlyOcrMatch || legalArticleAbbreviationMatch || symbolCorruptionMatch || omittedParenthetical) {
             section.title = expectedTitle;
         }
     });
@@ -833,6 +847,24 @@ function applyCanonicalTopicId(data, context) {
     const migration = buildTopicIdMigrationMap({ topic_id: previous, topic_title: data.topic_title }, data, context.fileName);
     if (migration) {
         console.warn(`⚠️ topic_id do modelo substituído pelo valor canônico: "${migration.old_topic_id}" -> "${migration.new_topic_id}".`);
+    }
+    return data;
+}
+
+function canonicalizeTopicTitleFromSource(data, markdown) {
+    if (!data || typeof data !== 'object') return data;
+    const firstContentLine = String(markdown || '').split(/\r?\n/).find(line => line.trim())?.trim() || '';
+    const markerMatch = firstContentLine.match(/^@@@?[ \t]+(?!#)(\S.*?)[ \t]*$/);
+    const headingMatch = String(markdown || '').split(/\r?\n/)
+        .map(line => line.trim())
+        .find(line => /^#{1,6}\s+\S/.test(line));
+    const sourceTitle = markerMatch?.[1] || (headingMatch ? stripHeadingSyntax(headingMatch) : '');
+    if (sourceTitle) {
+        data.topic_title = normalizeStudyTitle(
+            sourceTitle,
+            getTitleNormalizationContext(markdown),
+            { repairOcr: false }
+        );
     }
     return data;
 }
@@ -1321,10 +1353,17 @@ function cleanMermaidInSections(data, verbose = true) {
 
     data.sections.forEach((section, index) => {
         const originalMermaid = section.mermaid_mindmap;
-        section.mermaid_mindmap = cleanMermaidCode(originalMermaid, {
+        const context = {
             title: section.title,
             content_markdown: section.content_markdown
-        });
+        };
+        let cleanedMermaid = cleanMermaidCode(originalMermaid, context);
+        for (let attempt = 0; attempt < 10; attempt += 1) {
+            const nextMermaid = cleanMermaidCode(cleanedMermaid, context);
+            if (nextMermaid === cleanedMermaid) break;
+            cleanedMermaid = nextMermaid;
+        }
+        section.mermaid_mindmap = cleanedMermaid;
 
         if (shouldPrintDetails) {
             console.log(`\n--- Seção ${index + 1}: ${section.title} ---`);
@@ -1360,6 +1399,16 @@ function compactSourceMermaid(sourceMermaid) {
             .slice(0, 36)
             .trim();
         if (label && !labels.includes(label)) labels.push(label);
+    }
+    if (labels.length < 3 && /^\s*mindmap\b/im.test(sourceMermaid)) {
+        String(sourceMermaid).split(/\r?\n/).slice(1).forEach(line => {
+            const label = line.trim()
+                .replace(/^root\(\((.*)\)\)$/i, '$1')
+                .replace(/^[\[(]+|[\])]$/g, '')
+                .replace(/"/g, '\\"')
+                .trim();
+            if (label && !labels.includes(label) && labels.length < 4) labels.push(label);
+        });
     }
     if (labels.length < 3) return '';
     return [
@@ -1409,18 +1458,130 @@ function enforceVisualResourceQuantities(data, markdown, visualManifestContext) 
         });
     }
 
-    if (highlightRequirement && highlightRequirement.maximum === 1) {
-        let retained = false;
+    if (highlightRequirement && Number.isInteger(highlightRequirement.maximum)) {
+        let retained = 0;
         data.sections.forEach(section => {
             if (!Array.isArray(section.callouts)) return;
-            if (!retained && section.callouts.length > 0) {
-                section.callouts = [section.callouts[0]];
-                retained = true;
-            } else {
-                section.callouts = [];
-            }
+            const remaining = Math.max(0, highlightRequirement.maximum - retained);
+            section.callouts = section.callouts.slice(0, remaining);
+            retained += section.callouts.length;
         });
     }
+    return data;
+}
+
+function removeInvalidFlashcards(data) {
+    if (!Array.isArray(data?.sections)) return data;
+    data.sections.forEach(section => {
+        if (!Array.isArray(section.flashcards)) return;
+        section.flashcards = section.flashcards.filter(
+            (flashcard, index) => validateFlashcard(section, flashcard, index).length === 0
+        );
+    });
+    return data;
+}
+
+function extractMarkdownTablesBySection(markdown) {
+    const lines = String(markdown || '').split(/\r?\n/);
+    const tables = [];
+    let sectionTitle = '';
+    for (let index = 0; index < lines.length - 1; index += 1) {
+        if (/^##(?!#)\s+\S/.test(lines[index].trim())) {
+            sectionTitle = stripHeadingSyntax(lines[index].trim());
+            continue;
+        }
+        const isHeader = /^\s*\|?.+\|.+\|?\s*$/.test(lines[index]);
+        const isSeparator = /^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(lines[index + 1]);
+        if (!isHeader || !isSeparator) continue;
+
+        const tableLines = [lines[index], lines[index + 1]];
+        index += 2;
+        while (index < lines.length && /^\s*\|?.+\|.+\|?\s*$/.test(lines[index])) {
+            tableLines.push(lines[index]);
+            index += 1;
+        }
+        index -= 1;
+        tables.push({
+            sectionTitle,
+            headerKey: normalizeTitleKey(tableLines[0]),
+            markdown: tableLines.join('\n').trim(),
+        });
+    }
+    return tables;
+}
+
+function removeMarkdownTables(markdown) {
+    const lines = String(markdown || '').split(/\r?\n/);
+    const retained = [];
+    for (let index = 0; index < lines.length; index += 1) {
+        const isHeader = /^\s*\|?.+\|.+\|?\s*$/.test(lines[index]);
+        const isSeparator = index + 1 < lines.length
+            && /^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(lines[index + 1]);
+        if (!isHeader || !isSeparator) {
+            retained.push(lines[index]);
+            continue;
+        }
+        index += 2;
+        while (index < lines.length && /^\s*\|?.+\|.+\|?\s*$/.test(lines[index])) index += 1;
+        index -= 1;
+    }
+    return retained.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+
+function recoverRequiredTables(data, markdown, visualManifestContext) {
+    if (!Array.isArray(data?.sections) || !visualManifestContext?.topics?.length) return data;
+    const tableRequirement = visualManifestContext.topics
+        .flatMap(topic => topic.requirements || [])
+        .find(requirement => requirement.resource === 'table');
+    if (!tableRequirement) return data;
+
+    const sourceTables = extractMarkdownTablesBySection(markdown);
+    const outputTables = data.sections.flatMap(section => extractMarkdownTablesBySection(
+        `## ${section.title}\n${section.content_markdown || ''}`
+    ));
+    const maximum = tableRequirement.maximum;
+    if (Number.isInteger(maximum) && outputTables.length > maximum && sourceTables.length <= maximum) {
+        data.sections.forEach(section => {
+            section.content_markdown = removeMarkdownTables(section.content_markdown || '');
+        });
+        sourceTables.forEach(table => {
+            const targetKey = normalizeTitleKey(table.sectionTitle);
+            const targetSection = data.sections.find(section => normalizeTitleKey(section.title) === targetKey)
+                || data.sections[0];
+            if (!targetSection) return;
+            targetSection.content_markdown = [targetSection.content_markdown?.trim(), table.markdown]
+                .filter(Boolean)
+                .join('\n\n');
+        });
+        return data;
+    }
+    if (outputTables.length >= sourceTables.length || sourceTables.length > maximum) return data;
+
+    const outputHeaderCounts = new Map();
+    outputTables.forEach(table => outputHeaderCounts.set(
+        table.headerKey,
+        (outputHeaderCounts.get(table.headerKey) || 0) + 1
+    ));
+    const missingTables = sourceTables.filter(table => {
+        const available = outputHeaderCounts.get(table.headerKey) || 0;
+        if (available > 0) {
+            outputHeaderCounts.set(table.headerKey, available - 1);
+            return false;
+        }
+        return true;
+    });
+
+    let remaining = sourceTables.length - outputTables.length;
+    missingTables.slice(0, remaining).forEach(table => {
+        const targetKey = normalizeTitleKey(table.sectionTitle);
+        const targetSection = data.sections.find(section => normalizeTitleKey(section.title) === targetKey)
+            || data.sections[0];
+        if (!targetSection) return;
+        targetSection.content_markdown = [targetSection.content_markdown?.trim(), table.markdown]
+            .filter(Boolean)
+            .join('\n\n');
+        remaining -= 1;
+    });
     return data;
 }
 
@@ -2788,9 +2949,12 @@ async function processMarkdownFile(inputPath, args, outputBaseDir = process.cwd(
 
     // Grava somente depois das normalizações e da validação estrutural contra a fonte.
     data = validateAndNormalizeOutput(data, inputPath, args.discipline);
+    canonicalizeTopicTitleFromSource(data, markdownContent);
     canonicalizeSectionTitlesFromSource(data, markdownContent);
     recoverEmptySectionsFromSource(data, markdownContent);
     assertSectionStructureMatchesSource(data, markdownContent);
+    removeInvalidFlashcards(data);
+    recoverRequiredTables(data, markdownContent, visualManifestContext);
     cleanMermaidInSections(data, false);
     enforceVisualResourceQuantities(data, markdownContent, visualManifestContext);
     cleanMermaidInSections(data, false);
@@ -2959,6 +3123,7 @@ module.exports = {
     processMarkdownFile,
     validateAndNormalizeOutput,
     cleanMermaidCode,
+    cleanMermaidInSections,
     parseLeiautArgs,
     resolveOutputDirectory,
     resolveMarkdownInputPaths,
@@ -2976,6 +3141,10 @@ module.exports = {
     splitByHeadingLevel,
     buildLeiautBlockPrompt,
     enforceVisualResourceQuantities,
+    removeInvalidFlashcards,
+    extractMarkdownTablesBySection,
+    removeMarkdownTables,
+    recoverRequiredTables,
     mergeLeiautBlockData,
     loadVisualManifest,
     buildVisualPromptInstruction,
@@ -2994,6 +3163,7 @@ module.exports = {
     validateMarkdownInput,
     assertSectionStructureMatchesSource,
     canonicalizeSectionTitlesFromSource,
+    canonicalizeTopicTitleFromSource,
     recoverEmptySectionsFromSource,
     assertImportableSections,
     getLevelTwoHeadingTitles,

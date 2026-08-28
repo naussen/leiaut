@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026-08-27 — cardinalidade global de realces
+
+- limita callouts ao máximo global definido pelo manifesto visual, inclusive quando o teto é maior que um.
+- restaura títulos de seção a partir do cabeçalho literal da fonte sem aplicar reparo de fragmentação OCR sobre texto já limpo.
+- remove enriquecimentos de flashcard individualmente reprovados antes de persistir o JSON, preservando os cartões válidos.
+- repete a normalização segura de Mermaid até convergir, evitando JSON que ainda exigiria nova limpeza.
+- diferencia flashcards em blockquote de realces visuais e compacta `mindmap` denso quando o manifesto exige transportar o diagrama.
+- restaura também o `topic_title` a partir do título documental limpo, sem aplicar reparo OCR destrutivo.
+- recupera tabelas Markdown omitidas pelo modelo na seção-fonte correspondente quando o manifesto visual exige preservação.
+- substitui tabelas excedentes pelo conjunto literal da fonte quando o máximo do manifesto seria ultrapassado.
+- aceita referências numéricas e a preposição `em` em slugs canônicos sem classificá-las como fragmentação OCR.
+- restaura símbolos corrompidos que substituam letras em títulos de seção quando o pareamento posicional com a fonte for inequívoco.
+
 ## 2026-08-27 — limpeza de metadados de título
 
 - remove sufixos técnicos `[arquivo: NNN]` e corrige o erro OCR conhecido `Tiposde` nos títulos canônicos.

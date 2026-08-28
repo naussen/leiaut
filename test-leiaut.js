@@ -26,9 +26,11 @@ const {
   validateMarkdownInput,
   assertSectionStructureMatchesSource,
   canonicalizeSectionTitlesFromSource,
+  canonicalizeTopicTitleFromSource,
   recoverEmptySectionsFromSource,
   assertImportableSections,
   cleanMermaidCode,
+  cleanMermaidInSections,
   parseLeiautArgs,
   resolveOutputDirectory,
   resolveMarkdownInputPaths,
@@ -42,6 +44,8 @@ const {
   writeJsonOutput,
   buildLeiautBlockPrompt,
   enforceVisualResourceQuantities,
+  removeInvalidFlashcards,
+  recoverRequiredTables,
   mergeLeiautBlockData,
   collectPostGenerationDiagnostics,
   formatDiagnosticsLog,
@@ -162,6 +166,16 @@ function assert(condition, testName) {
     assert(context && context.topics.length === 1, 'Manifesto visual irmão é descoberto e associado');
     assert(buildVisualPromptInstruction(context).includes('Não substitua tabela por Mermaid'), 'Prompt restringe substituição de recurso visual');
     nodeAssert.deepStrictEqual(observeMarkdownResources(markdown), { table: 1, mermaid: 1, highlight: 1, mnemonic: 1 });
+    nodeAssert.strictEqual(
+      observeMarkdownResources('> **Flashcard 1: Teste**\n> **Pergunta:** Item?\n> **Resposta:** Sim.').highlight,
+      0,
+      'Flashcard em blockquote não é contado como realce visual'
+    );
+    nodeAssert.strictEqual(
+      observeMarkdownResources('Texto anterior.\n\n> **Flashcard 1: Teste**\n> **Pergunta:** Item?\n> **Resposta:** Sim.\n\n---\n\n> **Atenção:** regra posterior.').highlight,
+      1,
+      'Flashcard após conteúdo anterior é ignorado sem ocultar realce posterior'
+    );
     const data = {
       sections: [{
         title: 'Teste visual',
@@ -182,6 +196,64 @@ function assert(condition, testName) {
     enforceVisualResourceQuantities(quantityData, markdown, context);
     nodeAssert.strictEqual(observeJsonResources(quantityData).highlight, 1, 'Quantidade global de realce é limitada a um');
     nodeAssert.strictEqual(observeJsonResources(quantityData).mermaid, 1, 'Mermaid obrigatório é recuperado da fonte');
+    const twoTableMarkdown = [
+      '## Primeira',
+      '| Conta | Valor |',
+      '| --- | ---: |',
+      '| Caixa | R\\$ 10,00 |',
+      '',
+      '## Segunda',
+      '| Evento | Efeito |',
+      '| --- | --- |',
+      '| Venda | Receita |',
+    ].join('\n');
+    const oneTableData = { sections: [
+      { title: 'Primeira', content_markdown: '| Conta | Valor |\n| --- | ---: |\n| Caixa | R\\$ 10,00 |' },
+      { title: 'Segunda', content_markdown: 'Texto.' },
+    ] };
+    recoverRequiredTables(oneTableData, twoTableMarkdown, {
+      topics: [{ requirements: [{ resource: 'table', minimum: 1, maximum: 2 }] }],
+    });
+    nodeAssert.strictEqual(observeJsonResources(oneTableData).table, 2, 'Tabela ausente é recuperada literalmente na seção correspondente');
+    nodeAssert(oneTableData.sections[1].content_markdown.includes('| Evento | Efeito |'));
+    const excessTableData = { sections: [
+      { title: 'Primeira', content_markdown: '| Conta | Valor |\n| --- | ---: |\n| Caixa | R\\$ 10,00 |\n\n| Extra | Valor |\n| --- | --- |\n| IA | R\\$ 99,00 |' },
+      { title: 'Segunda', content_markdown: '| Evento | Efeito |\n| --- | --- |\n| Venda | Receita |' },
+    ] };
+    recoverRequiredTables(excessTableData, twoTableMarkdown, {
+      topics: [{ requirements: [{ resource: 'table', minimum: 1, maximum: 2 }] }],
+    });
+    nodeAssert.strictEqual(observeJsonResources(excessTableData).table, 2, 'Tabelas excedentes são substituídas pelo conjunto literal da fonte');
+    nodeAssert(!excessTableData.sections[0].content_markdown.includes('| IA | R\\$ 99,00 |'));
+    nodeAssert(excessTableData.sections[1].content_markdown.includes('| Venda | Receita |'));
+    const denseMindmapMarkdown = [
+      '```mermaid',
+      'mindmap',
+      '  root((Operações))',
+      '    Compras líquidas',
+      '      Tributos recuperáveis',
+      '    Vendas líquidas',
+      '      Deduções',
+      '```',
+    ].join('\n');
+    const denseMindmapData = { sections: [{ title: 'Mapa', content_markdown: '', callouts: [], mnemonics: [], flashcards: [], mermaid_mindmap: '' }] };
+    enforceVisualResourceQuantities(denseMindmapData, denseMindmapMarkdown, context);
+    nodeAssert.strictEqual(observeJsonResources(denseMindmapData).mermaid, 1, 'Mindmap denso obrigatório é recuperado em formato compacto');
+    const boundedHighlightContext = {
+      topics: [{ requirements: [{ resource: 'highlight', minimum: 1, maximum: 2 }] }],
+    };
+    const boundedHighlightData = {
+      sections: [
+        { callouts: [{ type: 'info' }, { type: 'warning' }] },
+        { callouts: [{ type: 'tip' }, { type: 'info' }] },
+      ],
+    };
+    enforceVisualResourceQuantities(boundedHighlightData, markdown, boundedHighlightContext);
+    nodeAssert.strictEqual(
+      observeJsonResources(boundedHighlightData).highlight,
+      2,
+      'Quantidade global de realce respeita máximos maiores que um'
+    );
     const result = validateVisualManifestOutput(data, markdown, context);
     assert(result.valid, 'Saída JSON compatível com manifesto deve ser aceita');
     const reportPath = writeVisualValidationReport(path.join(visualDir, 'saida.json'), context, result);
@@ -343,6 +415,19 @@ assertEqual(
   '',
   'Omite diagrama denso para permitir outro recurso didático'
 );
+(() => {
+  const data = { sections: [{
+    title: 'Teste',
+    content_markdown: '',
+    mermaid_mindmap: 'flowchart TD\n  A["Ajuste a Valor Presente - AVP"] --> B[Resultado]',
+  }] };
+  cleanMermaidInSections(data, false);
+  assertEqual(
+    cleanMermaidCode(data.sections[0].mermaid_mindmap, { title: 'Teste', content_markdown: '' }),
+    data.sections[0].mermaid_mindmap,
+    'Limpeza de Mermaid converge para saída idempotente'
+  );
+})();
 
 // ── Grupo 2: topic_id ─────────────────────────────────────
 _log('\n📦 Grupo 2: Normalização de topic_id');
@@ -586,6 +671,18 @@ _log('\n📦 Grupo 7: Validação de flashcards');
   validateAndNormalizeOutput(d);
   assertEqual(d.sections[0].flashcards[0].question, 'Pergunta indefinida', 'Question vazia → fallback');
   assertEqual(d.sections[0].flashcards[0].answer, 'Resposta indefinida', 'Answer vazia → fallback');
+
+  d = makeData({
+    sections: [{
+      section_id: 'x-sec-01', title: 'T', content_markdown: 'O patrimônio é o objeto da contabilidade.', mermaid_mindmap: '',
+      flashcards: [
+        { question: '[LETRA DA LEI] Conforme o Artigo 1, há uma regra.', answer: 'Texto legal: Regra inventada.' },
+        { question: '[CERTO/ERRADO] O patrimônio é o objeto da contabilidade.', answer: 'Gabarito: CERTO. Justificativa: O patrimônio é o objeto da contabilidade.' },
+      ]
+    }]
+  });
+  removeInvalidFlashcards(d);
+  assertEqual(d.sections[0].flashcards.length, 1, 'Flashcard reprovado é removido e o cartão válido é preservado');
 
   unmute();
 })();
@@ -1137,6 +1234,29 @@ _log('\n📦 Grupo 13: Padrão editorial e estrutural');
   assert(
     assertSectionStructureMatchesSource(qualifiedData, qualifiedSource) === qualifiedData,
     'Estrutura passa após restauração determinística dos qualificadores'
+  );
+
+  const cleanSpacingSource = '## Objeto, Campo de Atuação e Finalidade\n\nConteúdo.';
+  const cleanSpacingData = { sections: [{ title: 'Objeto, Campode Atuação e Finalidade' }] };
+  canonicalizeSectionTitlesFromSource(cleanSpacingData, cleanSpacingSource);
+  assertEqual(
+    cleanSpacingData.sections[0].title,
+    'Objeto, Campo de Atuação e Finalidade',
+    'Título limpo da fonte restaura espaço que a resposta da IA omitiu'
+  );
+  const corruptedSymbolData = { sections: [{ title: 'Patrim$nio L&quido' }] };
+  canonicalizeSectionTitlesFromSource(corruptedSymbolData, '## Patrimônio Líquido\n\nConteúdo.');
+  assertEqual(
+    corruptedSymbolData.sections[0].title,
+    'Patrimônio Líquido',
+    'Símbolos inválidos que substituem letras são restaurados pelo título literal da fonte'
+  );
+  const cleanTopicSpacingData = { topic_title: 'Folhade Pagamento' };
+  canonicalizeTopicTitleFromSource(cleanTopicSpacingData, '# Folha de Pagamento\n\n## Salário\nConteúdo.');
+  assertEqual(
+    cleanTopicSpacingData.topic_title,
+    'Folha de Pagamento',
+    'Título principal limpo da fonte restaura espaço que a resposta da IA omitiu'
   );
 
   const legalCitationSource = [

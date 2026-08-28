@@ -19,9 +19,13 @@ function countMarkdownHighlights(markdown) {
     const lines = String(markdown || '').split(/\r?\n/);
     let count = 0;
     for (let index = 0; index < lines.length; index += 1) {
-        if (/^\s*>/.test(lines[index]) || /^\s*:::\s*\w+/i.test(lines[index])) {
-            count += 1;
+        if (/^\s*>/.test(lines[index])) {
+            const blockStart = index;
             while (index + 1 < lines.length && (/^\s*>/.test(lines[index + 1]) || !lines[index + 1].trim())) index += 1;
+            const block = lines.slice(blockStart, index + 1);
+            if (!/^\s*>\s*(?:\*{1,2})?Flashcard\s+\d+/im.test(block.join('\n'))) count += 1;
+        } else if (/^\s*:::\s*\w+/i.test(lines[index])) {
+            count += 1;
         }
     }
     return count + (String(markdown).match(/<mark\b[^>]*>[^<]+<\/mark>/gi) || []).length;
