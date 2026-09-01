@@ -2178,8 +2178,12 @@ function buildTimelineStudyDiagram(uniqueLabels) {
 
     sourceSteps.forEach((label, index) => {
         const stepId = `etapa_${index + 1}`;
+        const ordinal = String(index + 1).padStart(2, '0');
+        const labelWithoutRepeatedOrdinal = String(label || '')
+            .replace(new RegExp(`^(?:(?:${ordinal}|${index + 1})\\s*·\\s*)+`, 'u'), '')
+            .trim();
         stepIds.push(stepId);
-        lines.push(`    ${stepId}["${String(index + 1).padStart(2, '0')} · ${sanitizeMermaidLabel(label)}"]`);
+        lines.push(`    ${stepId}["${ordinal} · ${sanitizeMermaidLabel(labelWithoutRepeatedOrdinal)}"]`);
         lines.push(index === 0 ? `    inicio --> ${stepId}` : `    etapa_${index} --> ${stepId}`);
     });
 

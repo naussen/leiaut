@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-08-31 — ordinais idempotentes em mapas Mermaid
+
+- impede que a normalização iterativa de linhas do tempo repita os prefixos `01 ·`, `02 ·` e equivalentes;
+- adiciona regressão para garantir que uma segunda normalização produza exatamente o mesmo diagrama.
+
 ## 2026-08-28 — rastreabilidade de flashcards
 
 - exige questão C/E com banca, ano, concurso/cargo, identificador e status válido/não anulado; cartões sem origem são descartados antes da publicação.

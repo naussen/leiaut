@@ -421,6 +421,26 @@ assertEqual(
     'flowchart TB\nA --> B\nB --> C',
     'Rótulos automáticos de aresta são removidos'
   );
+  const timeline = [
+    'flowchart TB',
+    '  inicio["PES - Dimensões"]',
+    '  etapa_1["01 · Projeto de Governo"]',
+    '  inicio --> etapa_1',
+    '  etapa_2["02 · Governabilidade"]',
+    '  etapa_1 --> etapa_2',
+    '  etapa_3["03 · Capacidade de Governo"]',
+    '  etapa_2 --> etapa_3'
+  ].join('\n');
+  const timelineContext = {
+    title: 'Planejamento Estratégico Situacional',
+    content_markdown: 'Etapas e sequência do planejamento.'
+  };
+  const normalizedTimeline = cleanMermaidCode(timeline, timelineContext);
+  nodeAssert.strictEqual(
+    cleanMermaidCode(normalizedTimeline, timelineContext),
+    normalizedTimeline,
+    'Linha do tempo permanece idempotente sem repetir ordinais'
+  );
   const data = { sections: [{
     title: 'Teste',
     content_markdown: '',
