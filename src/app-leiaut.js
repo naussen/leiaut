@@ -853,7 +853,8 @@ function repairOcrTitle(value) {
     const uppercaseFragmentPattern = /\b([\p{Lu}À-Ý][\p{Ll}à-ÿ]{1,4})\s+([\p{Lu}À-Ý][\p{Ll}à-ÿ]{1,4})\b/gu;
     const lowercaseFragmentPattern = /\b[\p{Lu}À-Ý][\p{Ll}à-ÿ]{2,5}\s+[\p{Ll}à-ÿ]{1,2}\b/u;
     const uppercaseFragments = repaired.match(uppercaseFragmentPattern) || [];
-    if (!lowercaseFragmentPattern.test(repaired) && uppercaseFragments.length < 2) return repaired;
+    const hasNumberedSectionPrefix = /^\s*\d+\s*[ªº]?/u.test(repaired);
+    if (!hasNumberedSectionPrefix && uppercaseFragments.length < 2) return repaired;
 
     let previous;
     do {

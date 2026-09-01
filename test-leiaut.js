@@ -1311,6 +1311,15 @@ _log('\n📦 Grupo 13: Padrão editorial e estrutural');
     'Estrutura passa após normalização controlada da abreviação de artigo'
   );
 
+  const shortPrepositionSource = '## Sociedade em Conta de Participacao – SCP (Art 991 a 996)\n\nConteudo.';
+  const shortPrepositionData = {
+    sections: [{ title: 'Sociedade em Conta de Participacao – SCP (Art 991 a 996)' }],
+  };
+  assert(
+    assertSectionStructureMatchesSource(shortPrepositionData, shortPrepositionSource) === shortPrepositionData,
+    'Preposicao curta legitima em titulo nao e unida como ruido OCR'
+  );
+
   const acronymQualifierSource = '## Sociedade em Comum – SEC (Art 986 a 990)\n\nConteudo.';
   const acronymQualifierData = {
     sections: [{ title: 'Sociedade em Comum (Art. 986 a 990)' }],
