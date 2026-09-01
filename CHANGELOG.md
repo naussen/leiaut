@@ -8,6 +8,7 @@
 - impede que o reparo OCR una preposições curtas legítimas, como `Conta de`, em títulos limpos.
 - restaura conjuntamente sigla e citação legal quando ambas forem omitidas em um título posicionalmente equivalente.
 - aplica também aos mnemônicos o máximo global definido pelo manifesto visual antes do gate de publicação.
+- reconcilia a expansão controlada de `Adm.` para `Administração` e restaura o título literal da fonte.
 
 ## 2026-08-31 — ordinais idempotentes em mapas Mermaid
 

@@ -1340,6 +1340,21 @@ _log('\n📦 Grupo 13: Padrão editorial e estrutural');
     'Preposicao curta legitima em titulo nao e unida como ruido OCR'
   );
 
+  const abbreviatedAdministrationSource = '## Crimes Praticados por Particular Contra a Adm. (Crimes Comuns)\n\nConteudo.';
+  const expandedAdministrationData = {
+    sections: [{ title: 'Crimes praticados por particular contra a administracao (Crimes comuns)' }],
+  };
+  canonicalizeSectionTitlesFromSource(expandedAdministrationData, abbreviatedAdministrationSource);
+  assertEqual(
+    expandedAdministrationData.sections[0].title,
+    'Crimes Praticados por Particular Contra a Adm. (Crimes Comuns)',
+    'Abreviacao Adm. expandida pelo modelo e restaurada literalmente da fonte'
+  );
+  assert(
+    assertSectionStructureMatchesSource(expandedAdministrationData, abbreviatedAdministrationSource) === expandedAdministrationData,
+    'Estrutura passa apos reconciliacao controlada de Adm. e administracao'
+  );
+
   const acronymQualifierSource = '## Sociedade em Comum – SEC (Art 986 a 990)\n\nConteudo.';
   const acronymQualifierData = {
     sections: [{ title: 'Sociedade em Comum (Art. 986 a 990)' }],

@@ -226,6 +226,10 @@ function normalizeLegalArticleCitationKey(value) {
     return normalizeTitleKey(value).replace(/\barts?\b(?=\s+\d)/g, 'art');
 }
 
+function normalizeKnownTitleAbbreviationKey(value) {
+    return normalizeTitleKey(value).replace(/\badm\b/g, 'administracao');
+}
+
 function isPredominantlyUppercaseTitle(value) {
     const letters = String(value || '').match(/\p{L}/gu) || [];
     if (letters.length < 2) return false;
@@ -428,6 +432,8 @@ function canonicalizeSectionTitlesFromSource(data, markdown) {
             === normalizeTitleCompactKey(expectedTitle);
         const legalArticleAbbreviationMatch = normalizeLegalArticleCitationKey(actualTitle)
             === normalizeLegalArticleCitationKey(expectedTitle);
+        const knownTitleAbbreviationMatch = normalizeKnownTitleAbbreviationKey(actualTitle)
+            === normalizeKnownTitleAbbreviationKey(expectedTitle);
         const expectedWithoutAcronymQualifier = expectedTitle
             .replace(/\s*[–—-]\s*[\p{L}\d]{2,5}\s*(?=\()/gu, ' ')
             .replace(/\s+/g, ' ')
@@ -456,7 +462,7 @@ function canonicalizeSectionTitlesFromSource(data, markdown) {
         const omittedParenthetical = expectedWithoutParenthetical !== expectedTitle
             && normalizeTitleKey(actualTitle) === normalizeTitleKey(expectedWithoutParenthetical);
 
-        if (exactMatch || whitespaceOnlyOcrMatch || legalArticleAbbreviationMatch || omittedAcronymQualifier || omittedAcronymAndParenthetical || symbolCorruptionMatch || omittedParenthetical) {
+        if (exactMatch || whitespaceOnlyOcrMatch || legalArticleAbbreviationMatch || knownTitleAbbreviationMatch || omittedAcronymQualifier || omittedAcronymAndParenthetical || symbolCorruptionMatch || omittedParenthetical) {
             section.title = expectedTitle;
         }
     });
