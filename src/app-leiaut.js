@@ -1476,6 +1476,7 @@ function enforceVisualResourceQuantities(data, markdown, visualManifestContext) 
     const requirements = visualManifestContext.topics.flatMap(topic => topic.requirements || []);
     const mermaidRequirement = requirements.find(requirement => requirement.resource === 'mermaid');
     const highlightRequirement = requirements.find(requirement => requirement.resource === 'highlight');
+    const mnemonicRequirement = requirements.find(requirement => requirement.resource === 'mnemonic');
 
     if (mermaidRequirement && mermaidRequirement.minimum > 0) {
         const mermaidSections = data.sections.filter(section => String(section.mermaid_mindmap || '').trim());
@@ -1508,6 +1509,16 @@ function enforceVisualResourceQuantities(data, markdown, visualManifestContext) 
             const remaining = Math.max(0, highlightRequirement.maximum - retained);
             section.callouts = section.callouts.slice(0, remaining);
             retained += section.callouts.length;
+        });
+    }
+
+    if (mnemonicRequirement && Number.isInteger(mnemonicRequirement.maximum)) {
+        let retained = 0;
+        data.sections.forEach(section => {
+            if (!Array.isArray(section.mnemonics)) return;
+            const remaining = Math.max(0, mnemonicRequirement.maximum - retained);
+            section.mnemonics = section.mnemonics.slice(0, remaining);
+            retained += section.mnemonics.length;
         });
     }
     return data;

@@ -197,6 +197,26 @@ function assert(condition, testName) {
     enforceVisualResourceQuantities(quantityData, markdown, context);
     nodeAssert.strictEqual(observeJsonResources(quantityData).highlight, 1, 'Quantidade global de realce é limitada a um');
     nodeAssert.strictEqual(observeJsonResources(quantityData).mermaid, 1, 'Mermaid obrigatório é recuperado da fonte');
+    const boundedMnemonicData = {
+      sections: [
+        { mnemonics: [{ key: 'PUCCACHO' }, { key: 'EXTRA-1' }] },
+        { mnemonics: [{ key: 'EXTRA-2' }] },
+      ],
+    };
+    enforceVisualResourceQuantities(boundedMnemonicData, markdown, {
+      topics: [{ requirements: [{ resource: 'mnemonic', minimum: 1, maximum: 1 }] }],
+    });
+    nodeAssert.strictEqual(
+      observeJsonResources(boundedMnemonicData).mnemonic,
+      1,
+      'Quantidade global de mnemonicos respeita o maximo do manifesto'
+    );
+    nodeAssert.strictEqual(
+      boundedMnemonicData.sections[0].mnemonics[0].key,
+      'PUCCACHO',
+      'Primeiro mnemonico valido e preservado deterministicamente'
+    );
+
     const twoTableMarkdown = [
       '## Primeira',
       '| Conta | Valor |',
