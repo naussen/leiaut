@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-09-01 — preservação do preâmbulo Markdown
+
+- restaura deterministicamente, na primeira seção JSON, o conteúdo existente antes do primeiro cabeçalho `##`;
+- preserva subtítulos, exemplos e fórmulas KaTeX do preâmbulo sem duplicá-los em reprocessamentos.
+
 ## 2026-08-31 — ordinais idempotentes em mapas Mermaid
 
 - impede que a normalização iterativa de linhas do tempo repita os prefixos `01 ·`, `02 ·` e equivalentes;

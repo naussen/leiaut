@@ -25,6 +25,7 @@ const {
   removeOrphanMarkdownHeadings,
   validateMarkdownInput,
   assertSectionStructureMatchesSource,
+  restorePrefaceInFirstSection,
   canonicalizeSectionTitlesFromSource,
   canonicalizeTopicTitleFromSource,
   recoverEmptySectionsFromSource,
@@ -1340,6 +1341,39 @@ _log('\n📦 Grupo 13: Padrão editorial e estrutural');
     incompatibleStructureRejected = error.code === 'LEIAUT_SECTION_STRUCTURE_INVALID';
   }
   assert(incompatibleStructureRejected, 'Título realmente incompatível continua sendo rejeitado');
+
+  const prefaceSource = [
+    '# Das Eleicoes',
+    '',
+    '### Sistemas eleitorais e quocientes',
+    '',
+    '$$QE = \\frac{V_v}{N_v}$$',
+    '',
+    'Exemplo: 10.000/23.',
+    '',
+    '## Registro de candidatura',
+    '',
+    'Conteudo da secao.',
+  ].join('\n');
+  const prefaceData = {
+    sections: [{ title: 'Registro de candidatura', content_markdown: 'Conteudo da secao.' }],
+  };
+  restorePrefaceInFirstSection(prefaceData, prefaceSource);
+  assert(
+    prefaceData.sections[0].content_markdown.startsWith('### Sistemas eleitorais e quocientes'),
+    'Conteudo anterior ao primeiro ## e preservado na primeira secao'
+  );
+  assert(
+    prefaceData.sections[0].content_markdown.includes('\\frac{V_v}{N_v}'),
+    'Formula quantitativa no preambulo e preservada literalmente'
+  );
+  const restoredPrefaceOnce = prefaceData.sections[0].content_markdown;
+  restorePrefaceInFirstSection(prefaceData, prefaceSource);
+  assertEqual(
+    prefaceData.sections[0].content_markdown,
+    restoredPrefaceOnce,
+    'Restauracao do preambulo e idempotente'
+  );
 
   const sourceBackedRecovery = {
     sections: [{

@@ -786,6 +786,33 @@ function buildDeterministicOutputs(markdownContent, inputPath, options = {}) {
     return assertUniqueTopicIds(outputs);
 }
 
+function restorePrefaceInFirstSection(data, markdown) {
+    if (!data || !Array.isArray(data.sections) || data.sections.length === 0) return data;
+    const split = splitByHeadingLevel(markdown, 2);
+    if (split.blocks.length === 0 || !split.preface) return data;
+
+    const preface = split.preface
+        .split(/\r?\n/)
+        .filter(line => !/^#(?!#)\s+\S/.test(line.trim()))
+        .join('\n')
+        .trim();
+    if (!preface) return data;
+
+    const firstSection = data.sections[0];
+    const current = String(firstSection.content_markdown || '').trim();
+    const comparisonKey = value => String(value || '')
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toLowerCase()
+        .replace(/\s+/g, ' ')
+        .trim();
+    const prefaceProbe = comparisonKey(preface).slice(0, 180);
+    if (prefaceProbe && comparisonKey(current).includes(prefaceProbe)) return data;
+
+    firstSection.content_markdown = [preface, current].filter(Boolean).join('\n\n');
+    return data;
+}
+
 function normalizeTitleCompactKey(value) {
     return normalizeTitleKey(value).replace(/\s+/g, '');
 }
@@ -1309,6 +1336,7 @@ async function generateLeiautData(markdownContent, inputPath, options) {
         const parsedFile = parseModelJsonResponse(response, label);
         applyCanonicalTopicId(parsedFile, context);
         canonicalizeSectionTitlesFromSource(parsedFile, markdownContent);
+        restorePrefaceInFirstSection(parsedFile, markdownContent);
         assertSectionStructureMatchesSource(parsedFile, markdownContent);
         return parsedFile;
     }
@@ -1337,6 +1365,7 @@ async function generateLeiautData(markdownContent, inputPath, options) {
         const parsedBlock = parseModelJsonResponse(response, label);
         applyCanonicalTopicId(parsedBlock, context);
         canonicalizeSectionTitlesFromSource(parsedBlock, sourceBlocks[index]);
+        restorePrefaceInFirstSection(parsedBlock, sourceBlocks[index]);
         assertSectionStructureMatchesSource(parsedBlock, sourceBlocks[index]);
         blockData.push(parsedBlock);
     }
@@ -3158,6 +3187,7 @@ module.exports = {
     buildTopicIdMigrationMap,
     writeJsonOutput,
     splitByHeadingLevel,
+    restorePrefaceInFirstSection,
     buildLeiautBlockPrompt,
     enforceVisualResourceQuantities,
     removeInvalidFlashcards,
