@@ -428,6 +428,13 @@ function canonicalizeSectionTitlesFromSource(data, markdown) {
             === normalizeTitleCompactKey(expectedTitle);
         const legalArticleAbbreviationMatch = normalizeLegalArticleCitationKey(actualTitle)
             === normalizeLegalArticleCitationKey(expectedTitle);
+        const expectedWithoutAcronymQualifier = expectedTitle
+            .replace(/\s*[–—-]\s*[\p{L}\d]{2,5}\s*(?=\()/gu, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
+        const omittedAcronymQualifier = expectedWithoutAcronymQualifier !== expectedTitle
+            && normalizeLegalArticleCitationKey(actualTitle)
+                === normalizeLegalArticleCitationKey(expectedWithoutAcronymQualifier);
         const actualCharacters = Array.from(actualTitle);
         const expectedCharacters = Array.from(expectedTitle);
         const symbolCorruptionMatch = actualCharacters.length === expectedCharacters.length
@@ -443,7 +450,7 @@ function canonicalizeSectionTitlesFromSource(data, markdown) {
         const omittedParenthetical = expectedWithoutParenthetical !== expectedTitle
             && normalizeTitleKey(actualTitle) === normalizeTitleKey(expectedWithoutParenthetical);
 
-        if (exactMatch || whitespaceOnlyOcrMatch || legalArticleAbbreviationMatch || symbolCorruptionMatch || omittedParenthetical) {
+        if (exactMatch || whitespaceOnlyOcrMatch || legalArticleAbbreviationMatch || omittedAcronymQualifier || symbolCorruptionMatch || omittedParenthetical) {
             section.title = expectedTitle;
         }
     });

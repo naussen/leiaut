@@ -1311,6 +1311,21 @@ _log('\n📦 Grupo 13: Padrão editorial e estrutural');
     'Estrutura passa após normalização controlada da abreviação de artigo'
   );
 
+  const acronymQualifierSource = '## Sociedade em Comum – SEC (Art 986 a 990)\n\nConteudo.';
+  const acronymQualifierData = {
+    sections: [{ title: 'Sociedade em Comum (Art. 986 a 990)' }],
+  };
+  canonicalizeSectionTitlesFromSource(acronymQualifierData, acronymQualifierSource);
+  assertEqual(
+    acronymQualifierData.sections[0].title,
+    'Sociedade em Comum – SEC (Art 986 a 990)',
+    'Sigla qualificadora omitida antes da citacao legal e restaurada da fonte'
+  );
+  assert(
+    assertSectionStructureMatchesSource(acronymQualifierData, acronymQualifierSource) === acronymQualifierData,
+    'Estrutura passa apos restauracao da sigla qualificadora'
+  );
+
   const wrongLegalCitationData = {
     sections: [
       { title: 'Produção de provas' },

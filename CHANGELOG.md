@@ -4,6 +4,7 @@
 
 - restaura deterministicamente, na primeira seção JSON, o conteúdo existente antes do primeiro cabeçalho `##`;
 - preserva subtítulos, exemplos e fórmulas KaTeX do preâmbulo sem duplicá-los em reprocessamentos.
+- restaura siglas qualificadoras de títulos omitidas pelo modelo antes de citações legais.
 
 ## 2026-08-31 — ordinais idempotentes em mapas Mermaid
 
