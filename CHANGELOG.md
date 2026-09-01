@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-09-01 — compatibilidade de Markdown com a importação
+
+- converte tags `<br>` introduzidas em Markdown para separadores seguros antes da publicação no contrato do site.
+
 ## 2026-09-01 — preservação do preâmbulo Markdown
 
 - restaura deterministicamente, na primeira seção JSON, o conteúdo existente antes do primeiro cabeçalho `##`;

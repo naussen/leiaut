@@ -15,6 +15,7 @@ const nodeAssert = require('assert');
 const {
   validateAndNormalizeOutput,
   normalizeMarkdownTransportNewlines,
+  removeHtmlLineBreakTags,
   normalizeMermaidTransportNewlines,
   normalizeContentTransportArtifacts,
   normalizeStudyTitle,
@@ -1095,6 +1096,11 @@ _log('\n📦 Grupo 12: Normalização conservadora de \\n literal');
     normalizeMarkdownTransportNewlines('Em JavaScript, \\n representa uma quebra de linha.'),
     'Em JavaScript, \\n representa uma quebra de linha.',
     '\\n isolado e potencialmente intencional é preservado'
+  );
+  assertEqual(
+    removeHtmlLineBreakTags('| Item | Regra |\n| --- | --- |\n| A | primeira;<br/>segunda |'),
+    '| Item | Regra |\n| --- | --- |\n| A | primeira; segunda |',
+    'Tag br em tabela e substituida por separador Markdown seguro'
   );
   const transported = {
     sections: [{

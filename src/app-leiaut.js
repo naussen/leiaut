@@ -1230,6 +1230,19 @@ function normalizeMarkdownTransportNewlines(value) {
     return value.replace(/\\n/g, '\n');
 }
 
+function removeHtmlLineBreakTags(value) {
+    if (typeof value !== 'string' || !/<br\s*\/?\s*>/i.test(value)) return value;
+
+    return value
+        .split(/\r?\n/)
+        .map(line => (line.includes('|')
+            ? line.replace(/\s*<br\s*\/?\s*>\s*/gi, '; ')
+            : line.replace(/\s*<br\s*\/?\s*>\s*/gi, '\n')))
+        .join('\n')
+        .replace(/([.;:])\s*;\s*/g, '$1 ')
+        .replace(/[ \t]+\n/g, '\n');
+}
+
 function normalizeMermaidTransportNewlines(value) {
     if (typeof value !== 'string' || !value.includes('\\n')) return value;
     const startsWithMermaidType = /^\s*(?:mindmap|graph\s+(?:TD|TB|BT|LR|RL)|flowchart\s+(?:TD|TB|BT|LR|RL))\b/i.test(value);
@@ -1401,6 +1414,8 @@ function cleanMermaidInSections(data, verbose = true) {
     console.log("\n🔍 Validando e limpando código Mermaid.js...");
 
     data.sections.forEach((section, index) => {
+        section.content_markdown = removeHtmlLineBreakTags(section.content_markdown);
+
         const originalMermaid = section.mermaid_mindmap;
         const context = {
             title: section.title,
@@ -2732,7 +2747,7 @@ function validateAndNormalizeOutput(data, sourceFilePath = '', disciplineOverrid
             section.content_markdown = "";
         } else {
             section.content_markdown = removeDocumentTitleMarker(
-                removeOrphanMarkdownHeadings(section.content_markdown)
+                removeHtmlLineBreakTags(removeOrphanMarkdownHeadings(section.content_markdown))
             );
         }
 
@@ -3248,6 +3263,7 @@ module.exports = {
     assertImportableSections,
     getLevelTwoHeadingTitles,
     normalizeMarkdownTransportNewlines,
+    removeHtmlLineBreakTags,
     normalizeMermaidTransportNewlines,
     normalizeContentTransportArtifacts,
     getVertexErrorStatus,
