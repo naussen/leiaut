@@ -6,6 +6,7 @@
 - preserva subtítulos, exemplos e fórmulas KaTeX do preâmbulo sem duplicá-los em reprocessamentos.
 - restaura siglas qualificadoras de títulos omitidas pelo modelo antes de citações legais.
 - impede que o reparo OCR una preposições curtas legítimas, como `Conta de`, em títulos limpos.
+- restaura conjuntamente sigla e citação legal quando ambas forem omitidas em um título posicionalmente equivalente.
 
 ## 2026-08-31 — ordinais idempotentes em mapas Mermaid
 

@@ -435,6 +435,12 @@ function canonicalizeSectionTitlesFromSource(data, markdown) {
         const omittedAcronymQualifier = expectedWithoutAcronymQualifier !== expectedTitle
             && normalizeLegalArticleCitationKey(actualTitle)
                 === normalizeLegalArticleCitationKey(expectedWithoutAcronymQualifier);
+        const expectedWithoutAcronymAndParenthetical = expectedWithoutAcronymQualifier
+            .replace(/\s*\([^()]*\)\s*/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
+        const omittedAcronymAndParenthetical = expectedWithoutAcronymAndParenthetical !== expectedTitle
+            && normalizeTitleKey(actualTitle) === normalizeTitleKey(expectedWithoutAcronymAndParenthetical);
         const actualCharacters = Array.from(actualTitle);
         const expectedCharacters = Array.from(expectedTitle);
         const symbolCorruptionMatch = actualCharacters.length === expectedCharacters.length
@@ -450,7 +456,7 @@ function canonicalizeSectionTitlesFromSource(data, markdown) {
         const omittedParenthetical = expectedWithoutParenthetical !== expectedTitle
             && normalizeTitleKey(actualTitle) === normalizeTitleKey(expectedWithoutParenthetical);
 
-        if (exactMatch || whitespaceOnlyOcrMatch || legalArticleAbbreviationMatch || omittedAcronymQualifier || symbolCorruptionMatch || omittedParenthetical) {
+        if (exactMatch || whitespaceOnlyOcrMatch || legalArticleAbbreviationMatch || omittedAcronymQualifier || omittedAcronymAndParenthetical || symbolCorruptionMatch || omittedParenthetical) {
             section.title = expectedTitle;
         }
     });

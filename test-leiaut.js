@@ -1335,6 +1335,20 @@ _log('\n📦 Grupo 13: Padrão editorial e estrutural');
     'Estrutura passa apos restauracao da sigla qualificadora'
   );
 
+  const omittedMetadataData = {
+    sections: [{ title: 'Sociedade em comum' }],
+  };
+  canonicalizeSectionTitlesFromSource(omittedMetadataData, acronymQualifierSource);
+  assertEqual(
+    omittedMetadataData.sections[0].title,
+    'Sociedade em Comum – SEC (Art 986 a 990)',
+    'Sigla e citacao legal omitidas juntas sao restauradas da fonte'
+  );
+  assert(
+    assertSectionStructureMatchesSource(omittedMetadataData, acronymQualifierSource) === omittedMetadataData,
+    'Estrutura passa apos restauracao conjunta de sigla e citacao legal'
+  );
+
   const wrongLegalCitationData = {
     sections: [
       { title: 'Produção de provas' },
