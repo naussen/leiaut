@@ -103,6 +103,11 @@ function matchesTopic(topic, inputPath, markdown) {
 }
 
 function selectVisualTopics(manifest, inputPath, markdown) {
+    const fileIndex = path.basename(inputPath).match(/^(\d{3})(?:_|-)/)?.[1] || null;
+    const indexedMatches = fileIndex
+        ? manifest.topics.filter(topic => topic.source_index === fileIndex)
+        : [];
+    if (indexedMatches.length > 0) return indexedMatches;
     const matches = manifest.topics.filter(topic => matchesTopic(topic, inputPath, markdown));
     if (matches.length > 0) return matches;
     if (manifest.topics.length === 1) return manifest.topics;
