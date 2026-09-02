@@ -6,6 +6,7 @@ const {
     assertUniqueTopicIds,
     buildTopicIdMigrationMap,
 } = require('./src/visual/topicIdAuthority');
+const { selectVisualTopics } = require('./src/visual/visualManifestReader');
 
 assert.strictEqual(resolveTopicId({
     topics: [{ topic_slug: 'direito-administrativo', topic_title: 'Direito Administrativo' }],
@@ -41,5 +42,14 @@ assert.deepStrictEqual(buildTopicIdMigrationMap(
     new_topic_id: 'tema-canonico',
     reason: 'autoridade-canonica-do-manifesto-visual'
 });
+assert.deepStrictEqual(
+    selectVisualTopics({
+        topics: [
+            { source_index: '009', canonical_title: 'Comunicação dos Atos Processuais', topic_slug: 'comunicacao-dos-atos-processuais' },
+            { source_index: '015', canonical_title: 'Lei 9.099/95 – Juizados Especiais Criminais', topic_slug: 'lei-9-099-95-juizados-especiais-criminais' },
+        ],
+    }, '015_Lei_9_099_95_Juizados_Especiais_Criminais_reescrito.md', '# Lei 9.099/95 – Juizados Especiais Criminais\n\n### Atos Processuais'),
+    [{ source_index: '015', canonical_title: 'Lei 9.099/95 – Juizados Especiais Criminais', topic_slug: 'lei-9-099-95-juizados-especiais-criminais' }]
+);
 
 console.log('test-topic-id: ok');
